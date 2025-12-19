@@ -1,0 +1,251 @@
+这是一份经过深度打磨、融合了产品思维与技术实现的最终版 **MVP 产品需求文档 (PRD)**。
+
+这份文档不仅包含了功能定义，还融入了我们刚才讨论的**移动端适配**、**图片字段**、**密码重置策略**以及**Vercel 统一部署**架构。
+
+您可以直接将下方内容保存为 `PRD.md`，它就是您开发过程中的“唯一真理来源”。
+
+---
+
+# 📝 AI 提示词库 (Prompt Library) - MVP 产品需求文档
+
+| 文档版本 | 修改日期 | 状态 | 负责人 |
+| --- | --- | --- | --- |
+| **v2.0 (Final)** | 2025-12-xx | 待开发 | Owner |
+
+## 1. 项目概览 (Project Overview)
+
+### 1.1 核心价值
+
+本项目是“三套资产”战略中的第一环（流量钩子）。
+
+* **对用户**：提供一个无广告、搜索快、结构化清晰的高质量 AI 提示词查阅工具。
+* **对作者**：通过“程序员开发的工具”这一差异化定位，建立信任，沉淀私域流量，为后续变现铺路。
+
+### 1.2 核心体验原则
+
+1. **Mobile First (移动端优先)**：90% 的流量来自手机，必须保证移动端操作（特别是复制）极其顺滑。
+2. **极速加载**：利用 Next.js SSG/SSR 技术，秒开页面，SEO 友好。
+3. **强导流**：在用户获得价值的瞬间（复制成功时）植入关注引导。
+
+---
+
+## 2. 技术架构 (Tech Stack)
+
+采用 **T3 Stack 变体**，实现全栈 Serverless，**前后台统一在 Vercel 部署**。
+
+* **前端框架**: Next.js 14+ (App Router)
+* **UI 组件**: Tailwind CSS + shadcn/ui (利用 v0.app 生成)
+* **后端逻辑**: Next.js Server Actions (无服务器函数) + Middleware
+* **数据库**: Supabase (PostgreSQL)
+* **鉴权**: Supabase Auth
+* **部署**: Vercel (Frontend & Admin Dashboard one-click deploy)
+
+---
+
+## 3. 角色与权限 (RBAC)
+
+| 角色 | 标识 | 权限描述 | 关键限制 |
+| --- | --- | --- | --- |
+| **Visitor** | `role: null` | 浏览列表/详情、搜索、筛选 | 不可进入后台 |
+| **User** | `role: user` | 浏览、搜索、复制、修改本人头像 | 不可进入后台，**封禁状态下禁止登录** |
+| **Admin** | `role: admin` | **全站读写**、进入 `/admin`、管理用户/内容 | 无 |
+
+---
+
+## 4. 功能详细说明 (Functional Specifications)
+
+### 4.1 前台：用户端 (Client Side)
+
+#### 4.1.1 首页 (Home)
+
+* **Hero Header**:
+* 大标题 + Slogan。
+* **全局搜索框**：大圆角设计，支持对 Title 和 Content 的模糊搜索。
+
+
+* **标签快捷区**:
+* 横向滚动条（移动端）/ 换行平铺（PC端）。
+* 点击标签跳转至筛选结果页。
+
+
+* **提示词列表 (List)**:
+* **PC端**：3列或4列瀑布流。
+* **移动端**：**单列大卡片**模式。
+* **卡片内容**：封面图（如有）、标题、简述（2行）、底部标签 Pills、热度/浏览量。
+
+
+
+#### 4.1.2 详情页 (Detail)
+
+* **内容展示**:
+* 渲染 Markdown，对 Code Block 进行高亮。
+* **Mobile 优化**：侧边栏元数据（作者/时间）在移动端沉底，优先展示内容。
+
+
+* **交互核心：复制 (Copy)**:
+* **PC端**：位于内容框右上角的图标按钮。
+* **移动端**：**底部常驻悬浮按钮 (Sticky Bottom)**，文案“一键复制”。
+* **反馈 (Toast)**：点击后弹出提示——“✅ 复制成功！关注公众号回复[Coze]获取自动化版”。
+
+
+
+#### 4.1.3 登录/注册
+
+* 支持 GitHub / Google 一键登录。
+* 支持 邮箱/密码 登录（主要用于 Admin 账号）。
+
+### 4.2 后台：管理端 (Admin Dashboard)
+
+**安全策略**：所有 `/admin/*` 路由通过 Middleware 拦截，非 Admin 重定向至首页。
+
+#### 4.2.1 提示词管理 (Prompt CMS)
+
+* **列表页**: 展示 ID、封面缩略图、标题、状态、创建时间。
+* **新增/编辑页**:
+* 标题 (Input)
+* 封面图 URL (Input - 填入外部图片链接)
+* 简介 (Textarea)
+* 内容 (Markdown Editor + **预览功能**)
+* 关联标签 (Multi-select 下拉)
+* 状态 (Switch: 公开/私密)
+
+
+
+#### 4.2.2 标签管理 (Tag Manager)
+
+* **功能**: 增删改查。
+* **逻辑**: 增加 Slug 字段（如 `writing`），用于生成 SEO 友好的 URL (`/tag/writing`)。
+* **保护**: 删除标签前，检查 `prompt_tags` 表，若有关联数据则禁止删除。
+
+#### 4.2.3 用户管理 (User Manager)
+
+* **列表页**: 头像、昵称、邮箱、状态。
+* **操作**:
+1. **封禁/解封**: 修改 `status` 字段。
+2. **初始化密码**:
+* 点击“初始化密码” -> 二次确认。
+* 调用 Server Action -> 强制重置密码为 `123654`。
+* 设置数据库 `must_change_password = true`。
+
+
+
+
+
+---
+
+## 5. 数据库设计 (Database Schema)
+
+请在 Supabase SQL Editor 中执行以下 SQL，包含最新的字段更新。
+
+```sql
+-- 1. 用户表 (增强版)
+create table profiles (
+  id uuid references auth.users not null primary key,
+  username text,
+  avatar_url text,
+  role text default 'user', -- 'user', 'admin'
+  status text default 'active', -- 'active', 'banned'
+  must_change_password boolean default false, -- 强制改密标记
+  created_at timestamp with time zone default timezone('utc'::text, now())
+);
+
+-- 2. 标签表
+create table tags (
+  id bigint generated by default as identity primary key,
+  name text unique not null, -- 标签名
+  slug text unique not null, -- URL 别名
+  color text default 'blue',
+  created_at timestamp with time zone default timezone('utc'::text, now())
+);
+
+-- 3. 提示词表 (增加封面图)
+create table prompts (
+  id bigint generated by default as identity primary key,
+  title text not null,
+  description text,
+  content text not null, -- Markdown
+  cover_image_url text, -- 新增：封面图链接
+  is_public boolean default true,
+  author_id uuid references profiles(id),
+  view_count bigint default 0,
+  created_at timestamp with time zone default timezone('utc'::text, now())
+);
+
+-- 4. 关联表
+create table prompt_tags (
+  prompt_id bigint references prompts(id) on delete cascade,
+  tag_id bigint references tags(id) on delete cascade,
+  primary key (prompt_id, tag_id)
+);
+
+-- 5. 安全策略 (RLS)
+alter table profiles enable row level security;
+alter table tags enable row level security;
+alter table prompts enable row level security;
+alter table prompt_tags enable row level security;
+
+-- 基础读策略
+create policy "Public prompts" on prompts for select using (is_public = true);
+create policy "Public tags" on tags for select using (true);
+create policy "Public prompt_tags" on prompt_tags for select using (true);
+create policy "Self profile" on profiles for select using (auth.uid() = id);
+
+-- 写入策略：建议在 Next.js Server Actions 中使用 Service Role 绕过 RLS 
+-- 或者配置详细的 Admin Policy
+
+```
+
+---
+
+## 6. 非功能性需求 (NFR)
+
+### 6.1 SEO 与分享
+
+* **Sitemap**: 构建时自动生成 `sitemap.xml`。
+* **Metadata**: 详情页动态生成 Title (`[标题] - AI提示词库`) 和 OpenGraph Image (社交分享卡片)。
+
+### 6.2 性能体验
+
+* **Skeleton (骨架屏)**: 数据加载期间展示灰色占位条，禁止页面抖动。
+* **Empty State**: 搜索无结果时，展示“换个词试试”并推荐热门标签。
+
+### 6.3 部署与运维
+
+* **环境隔离**: 本地开发使用 `.env.local`，线上 Vercel 设置环境变量。
+* **统一域名**: 前台 `yoursite.com`，后台 `yoursite.com/admin`。
+
+---
+
+## 7. 开发执行计划 (Execution Plan)
+
+### Phase 1: 基建 (Day 1)
+
+1. 初始化 Next.js + Tailwind + shadcn/ui。
+2. Supabase 建表，手动录入一条 Admin 数据。
+3. 配置 Middleware 保护 `/admin`。
+
+### Phase 2: 用户端 UI (Day 2-3)
+
+1. **v0.app 生成**: 首页 Hero、卡片(单列/多列响应式)、详情页。
+2. **数据对接**: 实现 Supabase Client 查询。
+3. **交互实现**: 搜索、筛选、**底部悬浮复制按钮**。
+
+### Phase 3: 管理端功能 (Day 4-6)
+
+1. **布局**: 简单的侧边栏 + 内容区。
+2. **CMS**: 实现 Prompt 增删改 (含 Markdown 预览)。
+3. **User**: 实现列表展示 + **密码重置 Server Action**。
+
+### Phase 4: 上线 (Day 7)
+
+1. **Vercel 部署**。
+2. **数据填充**: 录入 20-50 条高质量 Prompt。
+3. **埋点**: 开启 Vercel Analytics。
+
+---
+
+**下一步操作建议：**
+
+1. 初始化项目：`npx create-next-app@latest ai-prompts --typescript --tailwind --eslint`
+2. 安装 UI 库：`npx shadcn-ui@latest init`
+3. 开始你的编码之旅！
