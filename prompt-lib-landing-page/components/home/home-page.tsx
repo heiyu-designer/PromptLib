@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Search, Github, Copy, Check, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card'
@@ -10,10 +10,11 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import UserMenu from '@/components/auth/user-menu'
 import { useAuth } from '@/components/auth/auth-provider'
 import { getPrompts, incrementViewCount } from '@/app/actions/prompts'
-import { getTags } from '@/app/actions/tags'
+import { getTags } from '@/lib/supabase'
 import { trackCopy, getSettings } from '@/app/actions/copy'
 import { PromptWithRelations } from '@/lib/database'
 import SimpleSearch from '@/components/search/simple-search'
+import { getCurrentUser } from '@/lib/simple-auth'
 
 export default function HomePage() {
   const [prompts, setPrompts] = useState<PromptWithRelations[]>([])
@@ -167,34 +168,39 @@ export default function HomePage() {
 
   const loadTags = async () => {
     try {
-      const result = await getTags()
-      if (result.error) {
-        console.error('Failed to load tags:', result.error)
+      const { data, error } = await getTags()
+      if (error) {
+        console.error('Failed to load tags:', error)
         // Use mock tags when database is not available
         const mockTags = [
-          { id: 1, name: "编程", slug: "programming", color: "blue" },
-          { id: 2, name: "代码审查", slug: "code-review", color: "green" },
-          { id: 3, name: "文档", slug: "documentation", color: "purple" },
-          { id: 4, name: "写作", slug: "writing", color: "orange" },
-          { id: 5, name: "博客", slug: "blog", color: "red" }
+          { id: 1, name: "编程", slug: "programming", color: "#3B82F6" },
+          { id: 2, name: "代码审查", slug: "code-review", color: "#10B981" },
+          { id: 3, name: "文档", slug: "documentation", color: "#8B5CF6" },
+          { id: 4, name: "写作", slug: "writing", color: "#F59E0B" },
+          { id: 5, name: "博客", slug: "blog", color: "#EF4444" }
         ]
         setTags(mockTags)
         return
       }
-      setTags(result.tags || [])
+      setTags(data || [])
     } catch (err) {
       console.error('Failed to load tags:', err)
       // Use mock tags when there's a network error
       const mockTags = [
-        { id: 1, name: "编程", slug: "programming", color: "blue" },
-        { id: 2, name: "写作", slug: "writing", color: "orange" }
+        { id: 1, name: "编程", slug: "programming", color: "#3B82F6" },
+        { id: 2, name: "写作", slug: "writing", color: "#F59E0B" }
       ]
       setTags(mockTags)
     }
   }
 
+  // 使用防抖来延迟搜索
   useEffect(() => {
-    loadPrompts(true)
+    const timer = setTimeout(() => {
+      loadPrompts(true)
+    }, 300) // 300ms 防抖延迟
+
+    return () => clearTimeout(timer)
   }, [selectedTag, searchQuery])
 
   useEffect(() => {
@@ -209,10 +215,24 @@ export default function HomePage() {
   }
 
   const handleTagFilter = (tagId: number) => {
-    setSelectedTag(prev => prev === tagId ? null : tagId)
+    const newSelectedTag = selectedTag === tagId ? null : tagId
+    setSelectedTag(newSelectedTag)
+    // 立即重置页面并加载新的提示词
+    setPage(1)
+    setTimeout(() => loadPrompts(true), 0)
   }
 
   const handleCopy = async (promptId: number, content: string) => {
+    // 检查用户是否已登录
+    const simpleUser = getCurrentUser()
+    const currentUser = simpleUser || user
+
+    if (!currentUser) {
+      // 未登录用户显示友好提示
+      alert("🔒 请先登录后才能复制提示词哦～\n\n登录后即可解锁全部功能，享受完整的 AI 提示词库体验！")
+      return
+    }
+
     try {
       // Copy content to clipboard
       await navigator.clipboard.writeText(content)
@@ -221,7 +241,7 @@ export default function HomePage() {
       // Track copy event
       await trackCopy({
         prompt_id: promptId,
-        user_id: user?.id,
+        user_id: currentUser.id,
         user_agent: navigator.userAgent,
         referrer: document.referrer
       })
@@ -277,18 +297,18 @@ export default function HomePage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 dark:from-slate-900 dark:via-blue-900 dark:to-indigo-900">
       {/* Navbar */}
-      <nav className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <nav className="sticky top-0 z-50 border-b border-white/20 bg-white/80 backdrop-blur-xl supports-[backdrop-filter]:bg-white/80 dark:bg-slate-900/80">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 shadow-lg">
               <span className="text-sm font-bold text-white">P</span>
             </div>
-            <span className="text-xl font-semibold tracking-tight">PromptLib</span>
+            <span className="text-xl font-bold tracking-tight bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">PromptLib</span>
           </div>
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" asChild>
+            <Button variant="ghost" size="icon" className="hover:bg-slate-100 dark:hover:bg-slate-800" asChild>
               <a href="https://github.com" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
                 <Github className="h-5 w-5" />
               </a>
@@ -299,36 +319,53 @@ export default function HomePage() {
       </nav>
 
       {/* Hero Section */}
-      <section className="mx-auto max-w-5xl px-4 py-16 sm:px-6 sm:py-24 lg:px-8">
+      <section className="mx-auto max-w-5xl px-4 py-24 sm:px-6 sm:py-32 lg:px-8">
         <div className="text-center">
-          <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
-            发现高质量 AI 提示词
-          </h1>
-          <p className="mt-4 text-pretty text-lg text-muted-foreground sm:mt-6 sm:text-xl">
-            精选编程、写作和自动化提示词库
+          {/* 装饰性元素 */}
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center justify-center opacity-20">
+              <div className="h-72 w-72 rounded-full bg-gradient-to-r from-blue-400 to-purple-600 blur-3xl"></div>
+            </div>
+            <div className="relative">
+              <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent drop-shadow-2xl">
+                释放 AI 潜能，创作无限可能
+              </h1>
+            </div>
+          </div>
+          <p className="mt-8 text-pretty text-lg text-slate-600 dark:text-slate-300 sm:mt-10 sm:text-xl max-w-3xl mx-auto leading-relaxed">
+            汇聚全球顶尖开发者智慧，提供高质量的编程、创意写作和效率提升提示词，让 AI 成为你的超级助手
           </p>
 
           {/* Search Component */}
-          <div className="mx-auto mt-8 max-w-2xl sm:mt-10">
-            <SimpleSearch
-              value={searchQuery}
-              onChange={setSearchQuery}
-              onSearch={(query) => setSearchQuery(query)}
-              placeholder="搜索提示词..."
-            />
+          <div className="mx-auto mt-12 max-w-2xl sm:mt-14">
+            <div className="relative">
+              <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl blur-lg opacity-25"></div>
+              <div className="relative">
+                <SimpleSearch
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  onSearch={(query) => setSearchQuery(query)}
+                  placeholder="搜索提示词..."
+                />
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
       {/* Tag Filter Section */}
-      <section className="border-b border-border">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="flex gap-2 overflow-x-auto pb-6 scrollbar-hide sm:flex-wrap sm:justify-center">
+      <section className="border-b border-slate-200/60 bg-white/50 backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/50">
+        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+          <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide sm:flex-wrap sm:justify-center">
             <Button
               variant={selectedTag === null ? "default" : "outline"}
               size="sm"
               onClick={() => setSelectedTag(null)}
-              className="shrink-0 rounded-full"
+              className={`shrink-0 rounded-full transition-all duration-200 hover:scale-105 ${
+                selectedTag === null
+                  ? "bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg"
+                  : "bg-white/80 hover:bg-slate-100 dark:bg-slate-800/80 dark:hover:bg-slate-700/80 border-slate-200 dark:border-slate-600"
+              }`}
             >
               全部
             </Button>
@@ -338,7 +375,18 @@ export default function HomePage() {
                 variant={tag.isActive ? "default" : "outline"}
                 size="sm"
                 onClick={() => handleTagFilter(tag.id)}
-                className="shrink-0 rounded-full"
+                className={`shrink-0 rounded-full transition-all duration-200 hover:scale-105 ${
+                  tag.isActive
+                    ? "bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg"
+                    : "bg-white/80 hover:bg-slate-100 dark:bg-slate-800/80 dark:hover:bg-slate-700/80 border-slate-200 dark:border-slate-600"
+                }`}
+                style={
+                  !tag.isActive && tag.color ? {
+                    borderColor: tag.color,
+                    color: tag.color,
+                    backgroundColor: tag.color + "10"
+                  } : {}
+                }
               >
                 {tag.name}
               </Button>
@@ -348,39 +396,36 @@ export default function HomePage() {
       </section>
 
       {/* Prompt List */}
-      <section className="mx-auto max-w-7xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8">
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      <section className="mx-auto max-w-7xl px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
+        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
           {prompts.map((prompt) => (
             <Card
               key={prompt.id}
-              className="group overflow-hidden transition-all hover:-translate-y-1 hover:shadow-lg cursor-pointer"
+              className="group overflow-hidden transition-all duration-300 hover:-translate-y-2 hover:shadow-2xl cursor-pointer bg-white/80 backdrop-blur-sm border-slate-200/60 hover:border-blue-200/60 dark:bg-slate-800/80 dark:border-slate-700/60 dark:hover:border-blue-500/30"
               onClick={() => handlePromptClick(prompt.id)}
             >
-              <CardHeader className="p-0">
-                {prompt.cover_image_url && (
-                  <div className="aspect-video overflow-hidden">
-                    <img
-                      src={prompt.cover_image_url}
-                      alt={prompt.title}
-                      className="h-full w-full object-cover transition-transform group-hover:scale-105"
-                      onError={(e) => {
-                        // Hide image on error
-                        e.currentTarget.style.display = 'none'
-                      }}
-                    />
-                  </div>
-                )}
-              </CardHeader>
-              <CardContent className="p-4">
-                <h3 className="line-clamp-1 text-lg font-semibold">{prompt.title}</h3>
-                <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
+              <CardContent className="p-6">
+                <h3 className="line-clamp-1 text-xl font-bold text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                  {prompt.title}
+                </h3>
+                <p className="mt-3 line-clamp-3 text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
                   {prompt.description}
                 </p>
               </CardContent>
-              <CardFooter className="flex items-center justify-between p-4 pt-0">
-                <div className="flex flex-wrap gap-1.5">
+              <CardFooter className="flex items-center justify-between p-6 pt-0">
+                <div className="flex flex-wrap gap-2">
                   {prompt.tags?.map((tag) => (
-                    <Badge key={tag.id} variant="secondary" className="text-xs">
+                    <Badge
+                      key={tag.id}
+                      variant="secondary"
+                      className="text-xs px-2.5 py-1 rounded-full font-medium transition-all duration-200 hover:scale-105"
+                      style={{
+                        backgroundColor: tag.color + "15",
+                        color: tag.color,
+                        borderColor: tag.color + "30",
+                        borderWidth: "1px"
+                      }}
+                    >
                       {tag.name}
                     </Badge>
                   ))}
@@ -392,13 +437,13 @@ export default function HomePage() {
                     e.stopPropagation()
                     handleCopy(prompt.id, prompt.content)
                   }}
-                  className="h-8 w-8 shrink-0"
+                  className="h-10 w-10 shrink-0 rounded-full hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:text-blue-600 dark:hover:text-blue-400 transition-all duration-200 group-hover:scale-110"
                   aria-label="复制提示词"
                 >
                   {copiedId === prompt.id ? (
-                    <Check className="h-4 w-4 text-green-600" />
+                    <Check className="h-5 w-5 text-green-600" />
                   ) : (
-                    <Copy className="h-4 w-4" />
+                    <Copy className="h-5 w-5" />
                   )}
                 </Button>
               </CardFooter>
@@ -407,32 +452,55 @@ export default function HomePage() {
         </div>
 
         {loading && prompts.length === 0 && (
-          <div className="flex justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          <div className="flex justify-center py-20">
+            <div className="text-center">
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="h-16 w-16 rounded-full bg-gradient-to-r from-blue-400 to-purple-600 blur-xl opacity-20 animate-pulse"></div>
+                </div>
+                <Loader2 className="relative h-8 w-8 animate-spin text-blue-600" />
+              </div>
+              <p className="mt-4 text-slate-600 dark:text-slate-400 font-medium">正在加载精彩内容...</p>
+            </div>
           </div>
         )}
 
         {!loading && prompts.length === 0 && !error && (
-          <div className="py-12 text-center">
-            <p className="text-muted-foreground">
-              {searchQuery || selectedTag
-                ? '未找到匹配的提示词，请尝试其他搜索条件或标签。'
-                : '还没有提示词，请先添加一些内容。'}
-            </p>
+          <div className="py-20 text-center">
+            <div className="max-w-md mx-auto">
+              <div className="h-20 w-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-700 dark:to-slate-800 flex items-center justify-center">
+                <Search className="h-10 w-10 text-slate-400" />
+              </div>
+              <h3 className="text-xl font-semibold text-slate-900 dark:text-slate-100 mb-2">
+                {searchQuery || selectedTag ? '未找到匹配的提示词' : '还没有提示词'}
+              </h3>
+              <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
+                {searchQuery || selectedTag
+                  ? '请尝试其他搜索条件或标签，或许会有新的发现。'
+                  : '快来添加第一个提示词，开启AI创作之旅吧！'}
+              </p>
+            </div>
           </div>
         )}
 
         {hasMore && !loading && prompts.length > 0 && (
-          <div className="flex justify-center mt-8">
-            <Button onClick={handleLoadMore} variant="outline">
-              加载更多
+          <div className="flex justify-center mt-12">
+            <Button
+              onClick={handleLoadMore}
+              variant="outline"
+              className="rounded-full px-8 py-3 bg-white/80 hover:bg-slate-50 border-slate-200 hover:border-blue-300 dark:bg-slate-800/80 dark:hover:bg-slate-700 dark:border-slate-600 dark:hover:border-blue-500 transition-all duration-200 hover:scale-105"
+            >
+              加载更多精彩内容
             </Button>
           </div>
         )}
 
         {loading && prompts.length > 0 && (
-          <div className="flex justify-center mt-8">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          <div className="flex justify-center mt-12">
+            <div className="text-center">
+              <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
+              <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">正在加载更多...</p>
+            </div>
           </div>
         )}
       </section>

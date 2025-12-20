@@ -1,0 +1,391 @@
+"use client"
+
+import type React from "react"
+import { useState, useEffect } from "react"
+import { Plus, Pencil, Trash2, Search, Tag as TagIcon } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { getTags, createTag, updateTag, deleteTag, getPrompts } from "@/lib/supabase"
+import type { Database } from "@/lib/database"
+
+type Tag = Database['public']['Tables']['tags']['Row'] & {
+  prompt_count?: number
+}
+
+const COLORS = [
+  "#ef4444", // red
+  "#f97316", // orange
+  "#f59e0b", // amber
+  "#84cc16", // lime
+  "#22c55e", // green
+  "#06b6d4", // cyan
+  "#3b82f6", // blue
+  "#8b5cf6", // violet
+  "#ec4899", // pink
+  "#6b7280", // gray
+]
+
+export default function TagsPage() {
+  const [tags, setTags] = useState<Tag[]>([])
+  const [loading, setLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [editingTag, setEditingTag] = useState<Tag | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    loadTags()
+  }, [])
+
+  const loadTags = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+
+      const { data, error } = await getTags()
+      if (error) {
+        setError(`加载标签失败: ${error.message}`)
+      } else {
+        // 为每个标签获取使用数量
+        const tagsWithCount = await Promise.all(
+          (data || []).map(async (tag) => {
+            const { data: prompts } = await getPrompts({ tagId: tag.id })
+            return { ...tag, prompt_count: prompts?.length || 0 }
+          })
+        )
+        setTags(tagsWithCount)
+      }
+    } catch (err: any) {
+      setError(`加载数据失败: ${err.message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const filteredTags = tags.filter((tag) =>
+    tag.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    tag.slug.toLowerCase().includes(searchQuery.toLowerCase())
+  )
+
+  const handleEdit = (tag: Tag) => {
+    setEditingTag(tag)
+    setIsDialogOpen(true)
+  }
+
+  const handleAddNew = () => {
+    setEditingTag(null)
+    setIsDialogOpen(true)
+  }
+
+  const handleDelete = async (id: number, name: string) => {
+    if (!confirm(`确定要删除标签"${name}"吗？如果有提示词使用此标签，删除将失败。`)) return
+
+    try {
+      setError(null)
+      const { error } = await deleteTag(id)
+      if (error) {
+        setError(`删除失败: ${error.message}`)
+      } else {
+        await loadTags()
+      }
+    } catch (err: any) {
+      setError(`删除失败: ${err.message}`)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl font-bold tracking-tight">标签管理</h1>
+        </div>
+        <div className="text-center py-12">加载中...</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">标签管理</h1>
+          <p className="mt-1 text-sm text-muted-foreground">管理用于分类提示词的标签。</p>
+        </div>
+        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <DialogTrigger asChild>
+            <Button onClick={handleAddNew}>
+              <Plus className="h-4 w-4" />
+              添加新标签
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>{editingTag ? "编辑标签" : "添加新标签"}</DialogTitle>
+              <DialogDescription>
+                {editingTag ? "更新标签的信息。" : "创建一个新的标签用于分类提示词。"}
+              </DialogDescription>
+            </DialogHeader>
+            <TagForm
+              tag={editingTag}
+              onClose={() => setIsDialogOpen(false)}
+              onSave={loadTags}
+            />
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Search Bar */}
+      <div className="relative max-w-md">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          placeholder="搜索标签..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="pl-9"
+        />
+      </div>
+
+      {/* Tags Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filteredTags.map((tag) => (
+          <div
+            key={tag.id}
+            className="rounded-lg border border-border bg-card p-4 hover:shadow-md transition-shadow"
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-2 flex-1">
+                <div
+                  className="w-4 h-4 rounded-full"
+                  style={{ backgroundColor: tag.color }}
+                />
+                <div>
+                  <h3 className="font-medium">{tag.name}</h3>
+                  <p className="text-sm text-muted-foreground">/{tag.slug}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {tag.prompt_count || 0} 个提示词
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-1">
+                <Button variant="ghost" size="icon-sm" onClick={() => handleEdit(tag)}>
+                  <Pencil className="h-3 w-3" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => handleDelete(tag.id, tag.name)}
+                  disabled={(tag.prompt_count || 0) > 0}
+                >
+                  <Trash2 className="h-3 w-3 text-destructive" />
+                </Button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {filteredTags.length === 0 && (
+        <div className="rounded-lg border border-border bg-card p-12 text-center">
+          <TagIcon className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+          <p className="text-muted-foreground">
+            {searchQuery ? "未找到匹配的标签。" : "还没有标签，点击上方按钮创建第一个。"}
+          </p>
+        </div>
+      )}
+
+      {/* Statistics */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="rounded-lg border border-border bg-card p-4">
+          <h3 className="text-lg font-medium">总标签数</h3>
+          <p className="text-2xl font-bold text-primary">{tags.length}</p>
+        </div>
+        <div className="rounded-lg border border-border bg-card p-4">
+          <h3 className="text-lg font-medium">已使用标签</h3>
+          <p className="text-2xl font-bold text-primary">
+            {tags.filter(tag => (tag.prompt_count || 0) > 0).length}
+          </p>
+        </div>
+        <div className="rounded-lg border border-border bg-card p-4">
+          <h3 className="text-lg font-medium">未使用标签</h3>
+          <p className="text-2xl font-bold text-secondary-foreground">
+            {tags.filter(tag => (tag.prompt_count || 0) === 0).length}
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TagForm({
+  tag,
+  onClose,
+  onSave
+}: {
+  tag: Tag | null
+  onClose: () => void
+  onSave: () => void
+}) {
+  const [formData, setFormData] = useState({
+    name: tag?.name || "",
+    slug: tag?.slug || "",
+    color: tag?.color || COLORS[0]
+  })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // 自动生成slug
+  const generateSlug = (name: string) => {
+    return name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+  }
+
+  const handleNameChange = (name: string) => {
+    const newSlug = tag ? tag.slug : generateSlug(name)
+    setFormData(prev => ({
+      ...prev,
+      name,
+      slug: newSlug
+    }))
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+    setError(null)
+
+    try {
+      const tagData = {
+        name: formData.name,
+        slug: formData.slug,
+        color: formData.color
+      }
+
+      let result
+      if (tag) {
+        result = await updateTag(tag.id, tagData)
+      } else {
+        result = await createTag(tagData)
+      }
+
+      if (result.error) {
+        setError(result.error.message)
+      } else {
+        onClose()
+        onSave()
+      }
+    } catch (err: any) {
+      setError(`保存失败: ${err.message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6">
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Name */}
+      <div className="space-y-2">
+        <Label htmlFor="name">标签名称 *</Label>
+        <Input
+          id="name"
+          placeholder="例如：编程"
+          value={formData.name}
+          onChange={(e) => handleNameChange(e.target.value)}
+          required
+        />
+      </div>
+
+      {/* Slug */}
+      <div className="space-y-2">
+        <Label htmlFor="slug">URL 别名 *</Label>
+        <Input
+          id="slug"
+          placeholder="programming"
+          value={formData.slug}
+          onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
+          required
+        />
+        <p className="text-xs text-muted-foreground">
+          用于在URL中显示，只能包含字母、数字和连字符
+        </p>
+      </div>
+
+      {/* Color */}
+      <div className="space-y-2">
+        <Label>颜色</Label>
+        <div className="grid grid-cols-5 gap-2">
+          {COLORS.map((color) => (
+            <button
+              key={color}
+              type="button"
+              className={`h-8 rounded-md border-2 transition-all ${
+                formData.color === color
+                  ? 'border-primary scale-110'
+                  : 'border-border hover:border-primary/50'
+              `}
+              style={{ backgroundColor: color }}
+              onClick={() => setFormData({ ...formData, color })}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Preview */}
+      <div className="space-y-2">
+        <Label>预览</Label>
+        <div className="flex items-center gap-2">
+          <div
+            className="w-4 h-4 rounded-full"
+            style={{ backgroundColor: formData.color }}
+          />
+          <Badge
+            variant="outline"
+            style={{
+              backgroundColor: formData.color + '20',
+              borderColor: formData.color,
+              color: formData.color
+            }}
+          >
+            {formData.name || '标签名称'}
+          </Badge>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex justify-end gap-3">
+        <Button type="button" variant="outline" onClick={onClose} disabled={loading}>
+          取消
+        </Button>
+        <Button type="submit" disabled={loading}>
+          {loading ? '保存中...' : (tag ? "更新标签" : "创建标签")}
+        </Button>
+      </div>
+    </form>
+  )
+}

@@ -1,8 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { User, LogOut, Settings, ChevronDown } from 'lucide-react'
+import { User, LogOut, Settings, LayoutDashboard, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -13,12 +13,25 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useAuth, useIsAdmin } from './auth-provider'
+import { getCurrentUser, isCurrentUserAdmin as isSimpleAdmin, logout } from '@/lib/simple-auth'
 
 export default function UserMenu() {
   const { user, profile, signOut } = useAuth()
   const isAdmin = useIsAdmin()
+  const [simpleUser, setSimpleUser] = useState<{username: string; role: string} | null>(null)
+  const [isSimpleUserAdmin, setIsSimpleUserAdmin] = useState(false)
 
-  if (!user || !profile) {
+  useEffect(() => {
+    const currentUser = getCurrentUser()
+    setSimpleUser(currentUser)
+    setIsSimpleUserAdmin(isSimpleAdmin())
+  }, [])
+
+  // 优先使用简单登录，如果没有则使用 Supabase 登录
+  const currentUser = simpleUser || (user ? { username: profile?.username || user.email || '未知用户', email: user.email } : null)
+  const isCurrentUserAdmin = isSimpleUserAdmin || isAdmin
+
+  if (!currentUser) {
     return (
       <Link href="/login">
         <Button variant="ghost">登录</Button>
@@ -27,7 +40,25 @@ export default function UserMenu() {
   }
 
   const handleSignOut = async () => {
-    await signOut()
+    // 显示确认对话框
+    if (!confirm("确定要退出登录吗？")) {
+      return
+    }
+
+    try {
+      if (simpleUser) {
+        logout()
+      } else {
+        await signOut()
+      }
+
+      // 显示成功提示并刷新页面
+      alert("退出登录成功！")
+      window.location.reload()
+    } catch (error) {
+      console.error('退出登录失败:', error)
+      alert("退出登录失败，请稍后重试")
+    }
   }
 
   const getInitials = (name?: string) => {
@@ -45,9 +76,9 @@ export default function UserMenu() {
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="relative h-8 w-8 rounded-full">
           <Avatar className="h-8 w-8">
-            <AvatarImage src={profile.avatar_url || ''} alt={profile.username || 'User'} />
+            <AvatarImage src={profile?.avatar_url || ''} alt={currentUser.username} />
             <AvatarFallback>
-              {getInitials(profile.username || user.email || 'User')}
+              {getInitials(currentUser.username)}
             </AvatarFallback>
           </Avatar>
         </Button>
@@ -55,12 +86,10 @@ export default function UserMenu() {
       <DropdownMenuContent className="w-56" align="end" forceMount>
         <div className="flex items-center justify-start gap-2 p-2">
           <div className="flex flex-col space-y-1 leading-none">
-            {profile.username && (
-              <p className="font-medium">{profile.username}</p>
-            )}
-            {user.email && (
+            <p className="font-medium">{currentUser.username}</p>
+            {currentUser.email && (
               <p className="w-[200px] truncate text-sm text-muted-foreground">
-                {user.email}
+                {currentUser.email}
               </p>
             )}
           </div>
@@ -72,10 +101,10 @@ export default function UserMenu() {
             个人资料
           </Link>
         </DropdownMenuItem>
-        {isAdmin && (
+        {isCurrentUserAdmin && (
           <DropdownMenuItem asChild>
             <Link href="/admin" className="flex items-center gap-2">
-              <Settings className="h-4 w-4" />
+              <LayoutDashboard className="h-4 w-4" />
               管理后台
             </Link>
           </DropdownMenuItem>

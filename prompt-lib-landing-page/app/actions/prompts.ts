@@ -45,6 +45,34 @@ export async function getPrompts(params?: {
     const limit = params?.limit || 20
     const offset = (page - 1) * limit
 
+    let filteredPromptIds: number[] = []
+
+    // If filtering by tag, get matching prompt IDs first
+    if (params?.tagId) {
+      const { data: tagRelations, error: tagError } = await supabaseAdmin
+        .from('prompt_tags')
+        .select('prompt_id')
+        .eq('tag_id', params.tagId)
+
+      if (tagError) {
+        console.error('Error fetching tag relations:', tagError)
+        return { prompts: [], total: 0, error: tagError.message }
+      }
+
+      filteredPromptIds = tagRelations?.map(relation => relation.prompt_id) || []
+
+      // If no prompts found for this tag, return empty result
+      if (filteredPromptIds.length === 0) {
+        return {
+          prompts: [],
+          total: 0,
+          totalPages: 0,
+          currentPage: page,
+          error: null
+        }
+      }
+    }
+
     let query = supabaseAdmin
       .from('prompts')
       .select(`
@@ -60,9 +88,9 @@ export async function getPrompts(params?: {
       query = query.eq('is_public', params.isPublic)
     }
 
-    // Apply filters
-    if (params?.tagId) {
-      query = query.eq('prompt_tags.tag_id', params.tagId)
+    // Apply tag filter if we have filtered IDs
+    if (filteredPromptIds.length > 0) {
+      query = query.in('id', filteredPromptIds)
     }
 
     if (params?.search) {

@@ -1,9 +1,8 @@
 "use client"
 
 import type React from "react"
-
-import { useState } from "react"
-import { Plus, Pencil, Trash2, Search } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Plus, Pencil, Trash2, Search, Eye } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -19,46 +18,62 @@ import {
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { getPrompts, createPrompt, updatePrompt, deletePrompt, getTags } from "@/lib/supabase"
+import type { Database } from "@/lib/database"
+import { getCurrentUser } from "@/lib/simple-auth"
 
-const MOCK_PROMPTS = [
-  {
-    id: 1,
-    title: "代码审查助手",
-    slug: "code-review-assistant",
-    status: "active",
-    coverImage: "/code-review-on-screen.jpg",
-    tags: ["编程", "ChatGPT"],
-  },
-  {
-    id: 2,
-    title: "博客文章生成器",
-    slug: "blog-post-generator",
-    status: "draft",
-    coverImage: "/writing-blog-on-laptop.jpg",
-    tags: ["写作", "Claude"],
-  },
-  {
-    id: 3,
-    title: "Midjourney 场景构建器",
-    slug: "midjourney-scene-builder",
-    status: "active",
-    coverImage: "/artistic-digital-scene.jpg",
-    tags: ["Midjourney"],
-  },
-]
-
-const ALL_TAGS = ["写作", "编程", "Coze", "Midjourney", "ChatGPT", "Claude", "自动化"]
+type Prompt = Database['public']['Tables']['prompts']['Row'] & {
+  tags?: Array<{ id: number; name: string; slug: string; color: string }>
+}
+type Tag = Database['public']['Tables']['tags']['Row']
 
 export default function PromptsPage() {
+  const [prompts, setPrompts] = useState<Prompt[]>([])
+  const [tags, setTags] = useState<Tag[]>([])
+  const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [isDialogOpen, setIsDialogOpen] = useState(false)
-  const [editingPrompt, setEditingPrompt] = useState<any>(null)
+  const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  const filteredPrompts = MOCK_PROMPTS.filter((prompt) =>
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  const loadData = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+
+      const [promptsData, tagsData] = await Promise.all([
+        getPrompts(),
+        getTags()
+      ])
+
+      if (promptsData.error) {
+        setError(`加载提示词失败: ${promptsData.error.message}`)
+      } else {
+        setPrompts(promptsData.data || [])
+      }
+
+      if (tagsData.error) {
+        console.error('加载标签失败:', tagsData.error)
+      } else {
+        setTags(tagsData.data || [])
+      }
+    } catch (err: any) {
+      setError(`加载数据失败: ${err.message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const filteredPrompts = prompts.filter((prompt) =>
     prompt.title.toLowerCase().includes(searchQuery.toLowerCase()),
   )
 
-  const handleEdit = (prompt: any) => {
+  const handleEdit = (prompt: Prompt) => {
     setEditingPrompt(prompt)
     setIsDialogOpen(true)
   }
@@ -68,10 +83,32 @@ export default function PromptsPage() {
     setIsDialogOpen(true)
   }
 
-  const handleDelete = (id: number) => {
-    if (confirm("确定要删除这个提示词吗？")) {
-      console.log("Delete prompt:", id)
+  const handleDelete = async (id: number) => {
+    if (!confirm("确定要删除这个提示词吗？")) return
+
+    try {
+      setError(null)
+      const { error } = await deletePrompt(id)
+      if (error) {
+        setError(`删除失败: ${error.message}`)
+      } else {
+        await loadData()
+        alert("提示词已成功删除！")
+      }
+    } catch (err: any) {
+      setError(`删除失败: ${err.message}`)
     }
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl font-bold tracking-tight">提示词管理</h1>
+        </div>
+        <div className="text-center py-12">加载中...</div>
+      </div>
+    )
   }
 
   return (
@@ -96,10 +133,21 @@ export default function PromptsPage() {
                 {editingPrompt ? "更新提示词的详细信息。" : "为你的库创建一个新的提示词。"}
               </DialogDescription>
             </DialogHeader>
-            <PromptForm prompt={editingPrompt} onClose={() => setIsDialogOpen(false)} />
+            <PromptForm
+              prompt={editingPrompt}
+              tags={tags}
+              onClose={() => setIsDialogOpen(false)}
+              onSave={loadData}
+            />
           </DialogContent>
         </Dialog>
       </div>
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
 
       {/* Search Bar */}
       <div className="relative max-w-md">
@@ -122,6 +170,7 @@ export default function PromptsPage() {
               <TableHead>标题</TableHead>
               <TableHead className="w-[120px]">状态</TableHead>
               <TableHead>标签</TableHead>
+              <TableHead>浏览次数</TableHead>
               <TableHead className="w-[120px] text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
@@ -130,34 +179,41 @@ export default function PromptsPage() {
               <TableRow key={prompt.id}>
                 <TableCell className="font-medium">#{prompt.id}</TableCell>
                 <TableCell>
-                  <img
-                    src={prompt.coverImage || "/placeholder.svg"}
-                    alt={prompt.title}
-                    className="h-12 w-16 rounded object-cover"
-                  />
+                  {prompt.cover_image_url ? (
+                    <img
+                      src={prompt.cover_image_url}
+                      alt={prompt.title}
+                      className="h-12 w-16 rounded object-cover"
+                    />
+                  ) : (
+                    <div className="h-12 w-16 rounded bg-gray-200 flex items-center justify-center">
+                      <Eye className="h-6 w-6 text-gray-400" />
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell className="font-medium">{prompt.title}</TableCell>
                 <TableCell>
-                  <Badge variant={prompt.status === "active" ? "default" : "secondary"}>
-                    {prompt.status === "active" ? "已发布" : "草稿"}
+                  <Badge variant={prompt.is_public ? "default" : "secondary"}>
+                    {prompt.is_public ? "已发布" : "草稿"}
                   </Badge>
                 </TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-1">
-                    {prompt.tags.map((tag) => (
-                      <Badge key={tag} variant="outline" className="text-xs">
-                        {tag}
+                    {prompt.tags?.map((tag) => (
+                      <Badge key={tag.id} variant="outline" className="text-xs">
+                        {tag.name}
                       </Badge>
                     ))}
                   </div>
                 </TableCell>
+                <TableCell>{prompt.view_count || 0}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-2">
-                    <Button variant="ghost" size="icon-sm" onClick={() => handleEdit(prompt)}>
+                    <Button variant="ghost" size="sm" onClick={() => handleEdit(prompt)}>
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    <Button variant="ghost" size="icon-sm" onClick={() => handleDelete(prompt.id)}>
-                      <Trash2 className="h-4 w-4 text-destructive" />
+                    <Button variant="ghost" size="sm" onClick={() => handleDelete(prompt.id)}>
+                      <Trash2 className="h-4 w-4 text-red-500" />
                     </Button>
                   </div>
                 </TableCell>
@@ -169,41 +225,139 @@ export default function PromptsPage() {
 
       {filteredPrompts.length === 0 && (
         <div className="rounded-lg border border-border bg-card p-12 text-center">
-          <p className="text-muted-foreground">未找到提示词。请尝试调整搜索条件。</p>
+          <p className="text-muted-foreground">
+            {searchQuery ? "未找到匹配的提示词。" : "还没有提示词，点击上方按钮创建第一个。"}
+          </p>
         </div>
       )}
     </div>
   )
 }
 
-function PromptForm({ prompt, onClose }: { prompt: any; onClose: () => void }) {
+function PromptForm({
+  prompt,
+  tags,
+  onClose,
+  onSave
+}: {
+  prompt: Prompt | null
+  tags: Tag[]
+  onClose: () => void
+  onSave: () => void
+}) {
   const [formData, setFormData] = useState({
     title: prompt?.title || "",
-    slug: prompt?.slug || "",
+    description: prompt?.description || "",
     content: prompt?.content || "",
-    coverImageUrl: prompt?.coverImage || "",
-    tags: prompt?.tags || [],
-    isPublic: prompt?.status === "active" || false,
+    coverImageUrl: prompt?.cover_image_url || "",
+    isPublic: prompt?.is_public || false,
+    selectedTags: prompt?.tags?.map(tag => tag.id) || []
   })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    console.log("Form submitted:", formData)
-    onClose()
+    setLoading(true)
+    setError(null)
+
+    try {
+      // 导入数据库操作函数
+      const { supabaseAdmin } = await import('@/lib/supabase')
+
+      // 使用固定的admin用户ID，确保对应的用户档案存在
+      const DEFAULT_ADMIN_UUID = '00000000-0000-0000-0000-000000000001'
+
+      // 确保默认admin用户档案存在
+      const { error: checkError } = await supabaseAdmin
+        .from('profiles')
+        .select('id')
+        .eq('id', DEFAULT_ADMIN_UUID)
+        .single()
+
+      if (checkError) {
+        // 如果admin用户不存在，创建一个
+        console.log('创建默认admin用户档案')
+        const { error: createError } = await supabaseAdmin
+          .from('profiles')
+          .insert({
+            id: DEFAULT_ADMIN_UUID,
+            username: 'admin',
+            role: 'admin',
+            status: 'active'
+          })
+
+        if (createError) {
+          console.error('创建默认admin用户档案失败:', createError)
+        }
+      }
+
+      const currentUser = getCurrentUser()
+      let authorId: string
+
+      // 使用简单逻辑：如果有当前用户是admin，使用admin ID，否则使用admin ID
+      // 这样确保所有创建的提示词都有一个有效的author_id
+      authorId = DEFAULT_ADMIN_UUID
+
+      const promptData = {
+        title: formData.title,
+        description: formData.description,
+        content: formData.content,
+        cover_image_url: formData.coverImageUrl || null,
+        is_public: formData.isPublic,
+        author_id: authorId,
+        tag_ids: formData.selectedTags.length > 0 ? formData.selectedTags : undefined
+      }
+
+      let result
+      if (prompt) {
+        result = await updatePrompt(prompt.id, {
+          title: formData.title,
+          description: formData.description,
+          content: formData.content,
+          cover_image_url: formData.coverImageUrl || null,
+          is_public: formData.isPublic,
+          tag_ids: formData.selectedTags
+        })
+      } else {
+        result = await createPrompt(promptData)
+      }
+
+      if (result.error) {
+        setError(result.error.message)
+      } else {
+        const action = prompt ? "更新" : "创建"
+        alert(`提示词"${formData.title}"已成功${action}！`)
+        onClose()
+        onSave()
+      }
+    } catch (err: any) {
+      setError(`保存失败: ${err.message}`)
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const toggleTag = (tag: string) => {
+  const toggleTag = (tagId: number) => {
     setFormData((prev) => ({
       ...prev,
-      tags: prev.tags.includes(tag) ? prev.tags.filter((t) => t !== tag) : [...prev.tags, tag],
+      selectedTags: prev.selectedTags.includes(tagId)
+        ? prev.selectedTags.filter((t) => t !== tagId)
+        : [...prev.selectedTags, tagId],
     }))
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
       {/* Title */}
       <div className="space-y-2">
-        <Label htmlFor="title">标题</Label>
+        <Label htmlFor="title">标题 *</Label>
         <Input
           id="title"
           placeholder="输入提示词标题"
@@ -213,21 +367,20 @@ function PromptForm({ prompt, onClose }: { prompt: any; onClose: () => void }) {
         />
       </div>
 
-      {/* Slug */}
+      {/* Description */}
       <div className="space-y-2">
-        <Label htmlFor="slug">URL 别名</Label>
+        <Label htmlFor="description">描述</Label>
         <Input
-          id="slug"
-          placeholder="prompt-url-slug"
-          value={formData.slug}
-          onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
-          required
+          id="description"
+          placeholder="简短描述这个提示词的用途"
+          value={formData.description}
+          onChange={(e) => setFormData({ ...formData, description: e.target.value })}
         />
       </div>
 
       {/* Content */}
       <div className="space-y-2">
-        <Label htmlFor="content">内容（Markdown）</Label>
+        <Label htmlFor="content">内容（Markdown） *</Label>
         <Textarea
           id="content"
           placeholder="使用 Markdown 编写提示词内容..."
@@ -254,18 +407,24 @@ function PromptForm({ prompt, onClose }: { prompt: any; onClose: () => void }) {
       <div className="space-y-2">
         <Label>标签</Label>
         <div className="flex flex-wrap gap-2">
-          {ALL_TAGS.map((tag) => (
+          {tags.map((tag) => (
             <Button
-              key={tag}
+              key={tag.id}
               type="button"
-              variant={formData.tags.includes(tag) ? "default" : "outline"}
+              variant={formData.selectedTags.includes(tag.id) ? "default" : "outline"}
               size="sm"
-              onClick={() => toggleTag(tag)}
+              onClick={() => toggleTag(tag.id)}
+              style={{
+                backgroundColor: formData.selectedTags.includes(tag.id) ? tag.color : undefined
+              }}
             >
-              {tag}
+              {tag.name}
             </Button>
           ))}
         </div>
+        {tags.length === 0 && (
+          <p className="text-sm text-muted-foreground">还没有标签，请先在标签管理中创建标签。</p>
+        )}
       </div>
 
       {/* Public Status */}
@@ -283,10 +442,12 @@ function PromptForm({ prompt, onClose }: { prompt: any; onClose: () => void }) {
 
       {/* Actions */}
       <div className="flex justify-end gap-3">
-        <Button type="button" variant="outline" onClick={onClose}>
+        <Button type="button" variant="outline" onClick={onClose} disabled={loading}>
           取消
         </Button>
-        <Button type="submit">{prompt ? "更新提示词" : "创建提示词"}</Button>
+        <Button type="submit" disabled={loading}>
+          {loading ? '保存中...' : (prompt ? "更新提示词" : "创建提示词")}
+        </Button>
       </div>
     </form>
   )

@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Github, Mail, Eye, EyeOff } from 'lucide-react'
+import { Github, Eye, EyeOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -15,6 +15,12 @@ interface LoginFormProps {
   redirectTo?: string
 }
 
+// 简单的硬编码用户验证
+const ADMIN_CREDENTIALS = {
+  username: 'admin',
+  password: 'admin123'
+}
+
 export default function LoginForm({ redirectTo }: LoginFormProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -22,37 +28,59 @@ export default function LoginForm({ redirectTo }: LoginFormProps) {
   const router = useRouter()
   const { signIn, signInWithOAuth } = useAuth()
 
-  const handleEmailSignIn = async (e: React.FormEvent<HTMLFormElement>) => {
+  // 简单账号密码登录
+  const handleSimpleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setLoading(true)
     setError(null)
 
     const formData = new FormData(e.currentTarget)
-    const email = formData.get('email') as string
+    const username = formData.get('username') as string
     const password = formData.get('password') as string
 
-    const { error } = await signIn(email, password)
+    // 简单的硬编码验证
+    if (username === ADMIN_CREDENTIALS.username && password === ADMIN_CREDENTIALS.password) {
+      // 模拟登录成功，设置一个简单的localStorage标识
+      localStorage.setItem('isLoggedIn', 'true')
+      localStorage.setItem('userRole', 'admin')
+      localStorage.setItem('username', 'admin')
 
-    if (error) {
-      setError(error.message)
-    } else {
       router.push(redirectTo || '/admin')
+    } else {
+      setError('用户名或密码错误')
     }
 
     setLoading(false)
   }
 
-  const handleOAuthSignIn = async (provider: 'github' | 'google') => {
+  // GitHub OAuth登录
+  const handleOAuthSignIn = async (provider: 'github') => {
     setLoading(true)
     setError(null)
 
-    const { error } = await signInWithOAuth(provider)
+    try {
+      const { data, error } = await signInWithOAuth(provider)
 
-    if (error) {
-      setError(error.message)
+      if (error) {
+        console.error('OAuth error:', error)
+        let errorMessage = `OAuth登录失败: ${error.message}`
+
+        // 添加更具体的错误说明
+        if (error.message.includes('Provider token is missing')) {
+          errorMessage = 'GitHub OAuth配置错误：缺少Provider token。请检查GitHub OAuth App的Client Secret配置是否正确。'
+        } else if (error.message.includes('redirect_uri_mismatch')) {
+          errorMessage = 'GitHub OAuth回调URL不匹配。请检查GitHub OAuth App的Authorization callback URL是否正确设置。'
+        }
+
+        setError(errorMessage)
+        setLoading(false)
+      }
+      // OAuth成功时会自动跳转，无需额外处理
+    } catch (err: any) {
+      console.error('OAuth exception:', err)
+      setError(`OAuth登录异常: ${err.message}`)
       setLoading(false)
     }
-    // Note: OAuth will redirect, so we don't handle success here
   }
 
   return (
@@ -65,61 +93,22 @@ export default function LoginForm({ redirectTo }: LoginFormProps) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs defaultValue="oauth" className="w-full">
+          <Tabs defaultValue="simple" className="w-full">
             <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="oauth">社交登录</TabsTrigger>
-              <TabsTrigger value="email">邮箱登录</TabsTrigger>
+              <TabsTrigger value="simple">账号密码</TabsTrigger>
+              <TabsTrigger value="oauth">GitHub登录</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="oauth" className="space-y-4">
-              <div className="grid gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => handleOAuthSignIn('github')}
-                  disabled={loading}
-                  className="w-full"
-                >
-                  <Github className="mr-2 h-4 w-4" />
-                  GitHub 登录
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => handleOAuthSignIn('google')}
-                  disabled={loading}
-                  className="w-full"
-                >
-                  <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
-                    <path
-                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                      fill="#4285F4"
-                    />
-                    <path
-                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                      fill="#34A853"
-                    />
-                    <path
-                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-                      fill="#FBBC05"
-                    />
-                    <path
-                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                      fill="#EA4335"
-                    />
-                  </svg>
-                  Google 登录
-                </Button>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="email" className="space-y-4">
-              <form onSubmit={handleEmailSignIn} className="space-y-4">
+            <TabsContent value="simple" className="space-y-4">
+              <form onSubmit={handleSimpleLogin} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="email">邮箱地址</Label>
+                  <Label htmlFor="username">用户名</Label>
                   <Input
-                    id="email"
-                    name="email"
-                    type="email"
-                    placeholder="admin@example.com"
+                    id="username"
+                    name="username"
+                    type="text"
+                    placeholder="请输入用户名"
+                    defaultValue="admin"
                     required
                     disabled={loading}
                   />
@@ -131,7 +120,8 @@ export default function LoginForm({ redirectTo }: LoginFormProps) {
                       id="password"
                       name="password"
                       type={showPassword ? 'text' : 'password'}
-                      placeholder="输入密码"
+                      placeholder="请输入密码"
+                      defaultValue="admin123"
                       required
                       disabled={loading}
                     />
@@ -155,6 +145,20 @@ export default function LoginForm({ redirectTo }: LoginFormProps) {
                 </Button>
               </form>
             </TabsContent>
+
+            <TabsContent value="oauth" className="space-y-4">
+              <div className="grid gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => handleOAuthSignIn('github')}
+                  disabled={loading}
+                  className="w-full"
+                >
+                  <Github className="mr-2 h-4 w-4" />
+                  GitHub 登录
+                </Button>
+              </div>
+            </TabsContent>
           </Tabs>
 
           {error && (
@@ -164,9 +168,10 @@ export default function LoginForm({ redirectTo }: LoginFormProps) {
           )}
         </CardContent>
         <CardFooter>
-          <p className="text-center text-sm text-muted-foreground w-full">
-            仅授权管理员可访问此系统
-          </p>
+          <div className="text-center text-sm text-muted-foreground w-full">
+            <p>账号密码登录：admin / admin123</p>
+            <p>GitHub登录需要配置OAuth</p>
+          </div>
         </CardFooter>
       </Card>
     </div>

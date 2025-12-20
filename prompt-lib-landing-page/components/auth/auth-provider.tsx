@@ -37,7 +37,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setSession(session)
 
         // Fetch user profile
-        const { data: profile } = await supabase
+        const { data: profile, error: profileError } = await supabase
           .from('profiles')
           .select('*')
           .eq('id', session.user.id)
@@ -59,7 +59,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (session?.user) {
           // Fetch user profile when session changes
-          const { data: profile } = await supabase
+          const { data: profile, error: profileError } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', session.user.id)
@@ -94,12 +94,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const signInWithOAuth = async (provider: 'github' | 'google') => {
-    const { error } = await supabase.auth.signInWithOAuth({
+    const { data, error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        }
       },
     })
+
     return { error }
   }
 
