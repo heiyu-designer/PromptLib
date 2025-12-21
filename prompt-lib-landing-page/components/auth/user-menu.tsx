@@ -22,9 +22,23 @@ export default function UserMenu() {
   const [isSimpleUserAdmin, setIsSimpleUserAdmin] = useState(false)
 
   useEffect(() => {
-    const currentUser = getCurrentUser()
-    setSimpleUser(currentUser)
-    setIsSimpleUserAdmin(isSimpleAdmin())
+    const checkAuth = () => {
+      const currentUser = getCurrentUser()
+      setSimpleUser(currentUser)
+      setIsSimpleUserAdmin(isSimpleAdmin())
+    }
+
+    checkAuth()
+
+    // 监听 storage 变化（多标签页同步）
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'isLoggedIn' || e.key === 'username' || e.key === 'userRole') {
+        checkAuth()
+      }
+    }
+
+    window.addEventListener('storage', handleStorageChange)
+    return () => window.removeEventListener('storage', handleStorageChange)
   }, [])
 
   // 优先使用简单登录，如果没有则使用 Supabase 登录

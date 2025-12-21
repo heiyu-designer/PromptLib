@@ -19,7 +19,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { getPrompts, createPrompt, updatePrompt, deletePrompt, getTags } from "@/lib/supabase"
+import { supabaseAdmin } from "@/lib/supabase"
 import type { Database } from "@/lib/database"
 import { getCurrentUser } from "@/lib/simple-auth"
 
@@ -46,21 +46,32 @@ export default function PromptsPage() {
       setLoading(true)
       setError(null)
 
-      const [promptsData, tagsData] = await Promise.all([
-        getPrompts(),
-        getTags()
+      // 使用直接的 Supabase 查询，避免 Server Action 哈希问题
+      const [promptsResult, tagsResult] = await Promise.all([
+        supabaseAdmin.from('prompts').select(`
+          *,
+          prompt_tags(
+            tags(id, name, slug, color)
+          )
+        `),
+        supabaseAdmin.from('tags').select('*')
       ])
 
-      if (promptsData.error) {
-        setError(`加载提示词失败: ${promptsData.error.message}`)
+      if (promptsResult.error) {
+        setError(`加载提示词失败: ${promptsResult.error.message}`)
       } else {
-        setPrompts(promptsData.data || [])
+        // 转换数据格式，添加 tags 数组
+        const transformedPrompts = (promptsResult.data || []).map(prompt => ({
+          ...prompt,
+          tags: prompt.prompt_tags?.map(pt => pt.tags).filter(Boolean)
+        }))
+        setPrompts(transformedPrompts)
       }
 
-      if (tagsData.error) {
-        console.error('加载标签失败:', tagsData.error)
+      if (tagsResult.error) {
+        console.error('加载标签失败:', tagsResult.error)
       } else {
-        setTags(tagsData.data || [])
+        setTags(tagsResult.data || [])
       }
     } catch (err: any) {
       setError(`加载数据失败: ${err.message}`)
@@ -88,7 +99,12 @@ export default function PromptsPage() {
 
     try {
       setError(null)
-      const { error } = await deletePrompt(id)
+      // 使用直接的 Supabase 查询
+      const { error } = await supabaseAdmin
+        .from('prompts')
+        .delete()
+        .eq('id', id)
+
       if (error) {
         setError(`删除失败: ${error.message}`)
       } else {
@@ -262,9 +278,6 @@ function PromptForm({
     setError(null)
 
     try {
-      // 导入数据库操作函数
-      const { supabaseAdmin } = await import('@/lib/supabase')
-
       // 使用固定的admin用户ID，确保对应的用户档案存在
       const DEFAULT_ADMIN_UUID = '00000000-0000-0000-0000-000000000001'
 
@@ -299,28 +312,66 @@ function PromptForm({
       // 这样确保所有创建的提示词都有一个有效的author_id
       authorId = DEFAULT_ADMIN_UUID
 
-      const promptData = {
-        title: formData.title,
-        description: formData.description,
-        content: formData.content,
-        cover_image_url: formData.coverImageUrl || null,
-        is_public: formData.isPublic,
-        author_id: authorId,
-        tag_ids: formData.selectedTags.length > 0 ? formData.selectedTags : undefined
-      }
-
       let result
       if (prompt) {
-        result = await updatePrompt(prompt.id, {
-          title: formData.title,
-          description: formData.description,
-          content: formData.content,
-          cover_image_url: formData.coverImageUrl || null,
-          is_public: formData.isPublic,
-          tag_ids: formData.selectedTags
-        })
+        // 更新提示词
+        result = await supabaseAdmin
+          .from('prompts')
+          .update({
+            title: formData.title,
+            description: formData.description,
+            content: formData.content,
+            cover_image_url: formData.coverImageUrl || null,
+            is_public: formData.isPublic
+          })
+          .eq('id', prompt.id)
+          .select()
+          .single()
+
+        // 更新标签关系
+        if (formData.selectedTags.length > 0) {
+          // 删除现有标签关系
+          await supabaseAdmin
+            .from('prompt_tags')
+            .delete()
+            .eq('prompt_id', prompt.id)
+
+          // 创建新标签关系
+          const tagRelations = formData.selectedTags.map(tagId => ({
+            prompt_id: prompt.id,
+            tag_id: tagId
+          }))
+
+          await supabaseAdmin
+            .from('prompt_tags')
+            .insert(tagRelations)
+        }
       } else {
-        result = await createPrompt(promptData)
+        // 创建新提示词
+        result = await supabaseAdmin
+          .from('prompts')
+          .insert({
+            title: formData.title,
+            description: formData.description,
+            content: formData.content,
+            cover_image_url: formData.coverImageUrl || null,
+            is_public: formData.isPublic,
+            author_id: authorId
+          })
+          .select()
+          .single()
+
+        // 创建标签关系
+        if (formData.selectedTags.length > 0 && result.data) {
+          const tagRelations = formData.selectedTags.map(tagId => ({
+            prompt_id: result.data.id,
+            tag_id: tagId
+          }))
+
+          await supabaseAdmin
+            .from('prompt_tags')
+            .insert(tagRelations)
+        }
       }
 
       if (result.error) {

@@ -32,6 +32,22 @@ export function isCurrentUserAdmin() {
   }
 }
 
+// 开发环境：快速设置管理员权限
+export function setDevAdmin() {
+  if (typeof window === 'undefined') return
+  if (process.env.NODE_ENV === 'development') {
+    try {
+      localStorage.setItem('isLoggedIn', 'true')
+      localStorage.setItem('username', 'dev-admin')
+      localStorage.setItem('userRole', 'admin')
+      return true
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
 export function logout() {
   if (typeof window === 'undefined') return
   try {

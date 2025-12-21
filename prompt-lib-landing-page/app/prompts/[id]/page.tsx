@@ -1,96 +1,137 @@
 "use client"
 
-import { useState } from "react"
-import { ChevronRight, Copy, Check, Github } from "lucide-react"
+import { useState, useEffect } from "react"
+import { ChevronRight, Copy, Check, Github, Eye, ArrowLeft } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import Link from "next/link"
+import { supabaseAdmin } from "@/lib/supabase"
+import { useParams, useRouter } from "next/navigation"
+import type { Database } from "@/lib/database"
+import PromptCopyButton from "@/components/prompt/copy-button"
+import { useAuth } from "@/components/auth/auth-provider"
+import UserMenu from "@/components/auth/user-menu"
+import { getCurrentUser } from "@/lib/simple-auth"
+import ContentRenderer from "@/lib/content-renderer"
 
-const PROMPT_DATA = {
-  id: "1",
-  title: "代码审查助手",
-  description: "获得全面的代码审查，包含最佳实践和优化建议。",
-  lastUpdated: "2024-03-15",
-  author: {
-    name: "陈晓明",
-    avatar: "/developer-working.png",
-    role: "高级开发工程师",
-  },
-  tags: ["编程", "ChatGPT", "审查"],
-  modelVersion: "GPT-4",
-  category: "编程",
-  content: `你是一位专业的代码审查专家，精通软件工程最佳实践、设计模式和现代编程范式。
-
-## 你的任务
-
-全面审查提供的代码，并提供建设性反馈，重点关注：
-
-1. **代码质量**：可读性、可维护性和对最佳实践的遵循
-2. **性能**：潜在瓶颈和优化机会
-3. **安全性**：漏洞和安全最佳实践
-4. **架构**：设计模式和结构改进
-5. **测试**：测试覆盖率和质量
-
-## 审查指南
-
-- 在反馈中具体且具有建设性
-- 在建议改进时提供代码示例
-- 解释推荐背后的原因
-- 将关键问题优先于次要样式偏好
-- 考虑项目背景和约束
-
-## 输出格式
-
-按以下方式组织你的审查：
-
-### 总结
-代码质量和主要发现的简要概述。
-
-### 关键问题
-应立即解决的高优先级问题。
-
-### 建议
-带代码示例的改进建议。
-
-### 优点
-突出做得好的地方。
-
-## 使用示例
-
-\`\`\`javascript
-// 原始代码
-function getData(id) {
-  return fetch('/api/data/' + id)
-    .then(res => res.json())
-}
-
-// 改进建议
-async function getData(id: string): Promise<Data> {
-  try {
-    const response = await fetch(\`/api/data/\${id}\`);
-    if (!response.ok) {
-      throw new Error(\`HTTP 错误！状态：\${response.status}\`);
-    }
-    return await response.json();
-  } catch (error) {
-    console.error('获取数据失败：', error);
-    throw error;
-  }
-}
-\`\`\`
-
-现在，请提供你想让我审查的代码。`,
+type Prompt = Database['public']['Tables']['prompts']['Row'] & {
+  tags?: Array<{ id: number; name: string; slug: string; color: string }>
+  profiles?: { username: string | null; role: string | null }
 }
 
 export default function PromptDetailPage() {
-  const [copied, setCopied] = useState(false)
+  const [prompt, setPrompt] = useState<Prompt | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const params = useParams()
+  const router = useRouter()
+  const { user } = useAuth()
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(PROMPT_DATA.content)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+  useEffect(() => {
+    if (params.id) {
+      loadPrompt(params.id as string)
+    }
+  }, [params.id])
+
+  const loadPrompt = async (id: string) => {
+    try {
+      setLoading(true)
+      setError(null)
+
+      const promptId = parseInt(id)
+      if (isNaN(promptId)) {
+        setError('无效的提示词ID')
+        return
+      }
+
+      // 获取提示词详情，包含标签和作者信息
+      const { data: promptData, error: fetchError } = await supabaseAdmin
+        .from('prompts')
+        .select(`
+          *,
+          prompt_tags(
+            tags(id, name, slug, color)
+          ),
+          profiles(
+            username,
+            role
+          )
+        `)
+        .eq('id', promptId)
+        .eq('is_public', true)
+        .single()
+
+      if (fetchError || !promptData) {
+        console.error('获取提示词失败:', fetchError)
+        setError('提示词不存在或未公开')
+        return
+      }
+
+      // 转换数据格式
+      const transformedPrompt: Prompt = {
+        ...promptData,
+        tags: promptData.prompt_tags?.map(pt => pt.tags).filter(Boolean) || [],
+        profiles: promptData.profiles || undefined
+      }
+
+      setPrompt(transformedPrompt)
+
+      // 增加浏览次数
+      try {
+        const { data: currentPrompt } = await supabaseAdmin
+          .from('prompts')
+          .select('view_count')
+          .eq('id', promptId)
+          .single()
+
+        if (currentPrompt) {
+          await supabaseAdmin
+            .from('prompts')
+            .update({
+              view_count: (currentPrompt.view_count || 0) + 1
+            })
+            .eq('id', promptId)
+        }
+      } catch (viewError) {
+        console.error('更新浏览次数失败:', viewError)
+        // 不影响页面正常显示
+      }
+
+    } catch (err) {
+      console.error('获取提示词详情失败:', err)
+      setError('加载提示词详情失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+
+if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+          <p className="text-muted-foreground">正在加载提示词详情...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (error || !prompt) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-6xl mb-4">😕</div>
+          <h1 className="text-2xl font-bold mb-2">提示词未找到</h1>
+          <p className="text-muted-foreground mb-6">{error || '您请求的提示词不存在或未公开'}</p>
+          <Button onClick={() => router.push('/')}>
+            返回首页
+          </Button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -98,19 +139,36 @@ export default function PromptDetailPage() {
       {/* Navbar */}
       <nav className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600">
-              <span className="text-sm font-bold text-white">P</span>
-            </div>
-            <span className="text-xl font-semibold tracking-tight">PromptLib</span>
-          </Link>
+          <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => router.back()}
+              className="flex items-center gap-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              返回
+            </Button>
+            <Link href="/" className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600">
+                <span className="text-sm font-bold text-white">P</span>
+              </div>
+              <span className="text-xl font-semibold tracking-tight">PromptLib</span>
+            </Link>
+          </div>
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" asChild>
               <a href="https://github.com" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
                 <Github className="h-5 w-5" />
               </a>
             </Button>
-            <Button variant="ghost">登录</Button>
+            {user || getCurrentUser() ? (
+              <UserMenu />
+            ) : (
+              <Button variant="ghost" asChild>
+                <Link href="/login">登录</Link>
+              </Button>
+            )}
           </div>
         </div>
       </nav>
@@ -126,12 +184,12 @@ export default function PromptDetailPage() {
             </li>
             <ChevronRight className="h-4 w-4" />
             <li>
-              <Link href={`/?tag=${PROMPT_DATA.category}`} className="transition-colors hover:text-foreground">
-                {PROMPT_DATA.category}
+              <Link href="/" className="transition-colors hover:text-foreground">
+                提示词库
               </Link>
             </li>
             <ChevronRight className="h-4 w-4" />
-            <li className="line-clamp-1 text-foreground">{PROMPT_DATA.title}</li>
+            <li className="line-clamp-1 text-foreground">{prompt.title}</li>
           </ol>
         </nav>
 
@@ -141,98 +199,51 @@ export default function PromptDetailPage() {
             {/* Header */}
             <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex-1 space-y-3">
-                <h1 className="text-balance text-3xl font-bold tracking-tight sm:text-4xl">{PROMPT_DATA.title}</h1>
-                <div className="flex items-center gap-3">
-                  <Avatar className="h-10 w-10">
-                    <AvatarImage src={PROMPT_DATA.author.avatar || "/placeholder.svg"} alt={PROMPT_DATA.author.name} />
-                    <AvatarFallback>{PROMPT_DATA.author.name[0]}</AvatarFallback>
-                  </Avatar>
-                  <div className="text-sm">
-                    <p className="font-medium">{PROMPT_DATA.author.name}</p>
-                    <p className="text-muted-foreground">
-                      更新于{" "}
-                      {new Date(PROMPT_DATA.lastUpdated).toLocaleDateString("zh-CN", {
-                        year: "numeric",
-                        month: "long",
-                        day: "numeric",
-                      })}
-                    </p>
+                <h1 className="text-balance text-3xl font-bold tracking-tight sm:text-4xl">{prompt.title}</h1>
+                {prompt.description && (
+                  <p className="text-lg text-muted-foreground">{prompt.description}</p>
+                )}
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Eye className="h-4 w-4" />
+                    <span>{prompt.view_count || 0} 次浏览</span>
                   </div>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Copy className="h-4 w-4" />
+                    <span>{prompt.copy_count || 0} 次复制</span>
+                  </div>
+                  {prompt.profiles?.username && (
+                    <div className="flex items-center gap-2">
+                      <Avatar className="h-6 w-6">
+                        <AvatarFallback>
+                          {prompt.profiles.username[0]?.toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="text-sm text-muted-foreground">
+                        {prompt.profiles.username}
+                        {prompt.profiles.role && ` (${prompt.profiles.role})`}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 
               {/* Desktop Copy Button */}
-              <Button onClick={handleCopy} size="lg" className="hidden shrink-0 sm:flex">
-                {copied ? (
-                  <>
-                    <Check className="mr-2 h-4 w-4" />
-                    已复制！
-                  </>
-                ) : (
-                  <>
-                    <Copy className="mr-2 h-4 w-4" />
-                    复制提示词
-                  </>
-                )}
-              </Button>
+              <div className="hidden sm:block">
+                <PromptCopyButton
+                  content={prompt.content}
+                  promptId={prompt.id}
+                  className="shrink-0"
+                  size="lg"
+                />
+              </div>
             </div>
 
             {/* Content Body */}
             <Card>
-              <CardContent className="prose prose-slate max-w-none p-6 dark:prose-invert sm:p-8">
+              <CardContent className="p-6 sm:p-8">
                 <div className="space-y-6">
-                  {PROMPT_DATA.content.split("\n\n").map((paragraph, idx) => {
-                    // Check if it's a heading
-                    if (paragraph.startsWith("## ")) {
-                      return (
-                        <h2 key={idx} className="mt-8 text-2xl font-bold tracking-tight first:mt-0">
-                          {paragraph.replace("## ", "")}
-                        </h2>
-                      )
-                    }
-                    // Check if it's a code block
-                    if (paragraph.startsWith("```")) {
-                      const codeContent = paragraph.replace(/```\w*\n?/g, "").trim()
-                      return (
-                        <pre key={idx} className="overflow-x-auto rounded-lg bg-muted p-4">
-                          <code className="text-sm">{codeContent}</code>
-                        </pre>
-                      )
-                    }
-                    // Check if it's a list
-                    if (paragraph.match(/^\d+\./m)) {
-                      const items = paragraph.split("\n").filter((line) => line.trim())
-                      return (
-                        <ol key={idx} className="list-decimal space-y-2 pl-6">
-                          {items.map((item, i) => (
-                            <li key={i}>
-                              {item.replace(/^\d+\.\s/, "").replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}
-                            </li>
-                          ))}
-                        </ol>
-                      )
-                    }
-                    // Check if it's a bullet list
-                    if (paragraph.startsWith("- ")) {
-                      const items = paragraph.split("\n").filter((line) => line.trim())
-                      return (
-                        <ul key={idx} className="list-disc space-y-2 pl-6">
-                          {items.map((item, i) => (
-                            <li key={i}>{item.replace(/^-\s/, "")}</li>
-                          ))}
-                        </ul>
-                      )
-                    }
-                    // Regular paragraph with bold text support
-                    const boldText = paragraph.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-                    return (
-                      <p
-                        key={idx}
-                        className="leading-relaxed text-foreground"
-                        dangerouslySetInnerHTML={{ __html: boldText }}
-                      />
-                    )
-                  })}
+                  <ContentRenderer content={prompt.content} />
                 </div>
               </CardContent>
             </Card>
@@ -255,38 +266,45 @@ export default function PromptDetailPage() {
             <div className="mt-8 space-y-6 lg:hidden">
               <Card>
                 <CardContent className="p-6">
-                  <h3 className="mb-4 font-semibold">关于</h3>
+                  <h3 className="mb-4 font-semibold">关于此提示词</h3>
                   <div className="space-y-4">
-                    <div>
-                      <p className="mb-2 text-sm text-muted-foreground">标签</p>
-                      <div className="flex flex-wrap gap-2">
-                        {PROMPT_DATA.tags.map((tag) => (
-                          <Badge key={tag} variant="secondary">
-                            {tag}
-                          </Badge>
-                        ))}
+                    {prompt.tags && prompt.tags.length > 0 && (
+                      <div>
+                        <p className="mb-2 text-sm text-muted-foreground">标签</p>
+                        <div className="flex flex-wrap gap-2">
+                          {prompt.tags.map((tag) => (
+                            <Badge key={tag.id} variant="secondary">
+                              {tag.name}
+                            </Badge>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    )}
                     <div>
-                      <p className="mb-2 text-sm text-muted-foreground">模型版本</p>
-                      <p className="font-medium">{PROMPT_DATA.modelVersion}</p>
-                    </div>
-                    <div>
-                      <p className="mb-2 text-sm text-muted-foreground">作者</p>
-                      <div className="flex items-center gap-3">
-                        <Avatar className="h-10 w-10">
-                          <AvatarImage
-                            src={PROMPT_DATA.author.avatar || "/placeholder.svg"}
-                            alt={PROMPT_DATA.author.name}
-                          />
-                          <AvatarFallback>{PROMPT_DATA.author.name[0]}</AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <p className="font-medium">{PROMPT_DATA.author.name}</p>
-                          <p className="text-sm text-muted-foreground">{PROMPT_DATA.author.role}</p>
+                      <p className="mb-2 text-sm text-muted-foreground">统计</p>
+                      <div className="space-y-1 text-sm">
+                        <div className="flex items-center gap-2">
+                          <Eye className="h-3 w-3" />
+                          <span>{prompt.view_count || 0} 次浏览</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Copy className="h-3 w-3" />
+                          <span>{prompt.copy_count || 0} 次复制</span>
                         </div>
                       </div>
                     </div>
+                    {prompt.created_at && (
+                      <div>
+                        <p className="mb-2 text-sm text-muted-foreground">创建时间</p>
+                        <p className="text-sm">
+                          {new Date(prompt.created_at).toLocaleDateString("zh-CN", {
+                            year: "numeric",
+                            month: "long",
+                            day: "numeric",
+                          })}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -298,38 +316,45 @@ export default function PromptDetailPage() {
             <div className="sticky top-24 space-y-6">
               <Card>
                 <CardContent className="p-6">
-                  <h3 className="mb-4 font-semibold">关于</h3>
+                  <h3 className="mb-4 font-semibold">关于此提示词</h3>
                   <div className="space-y-4">
-                    <div>
-                      <p className="mb-2 text-sm text-muted-foreground">标签</p>
-                      <div className="flex flex-wrap gap-2">
-                        {PROMPT_DATA.tags.map((tag) => (
-                          <Badge key={tag} variant="secondary">
-                            {tag}
-                          </Badge>
-                        ))}
+                    {prompt.tags && prompt.tags.length > 0 && (
+                      <div>
+                        <p className="mb-2 text-sm text-muted-foreground">标签</p>
+                        <div className="flex flex-wrap gap-2">
+                          {prompt.tags.map((tag) => (
+                            <Badge key={tag.id} variant="secondary">
+                              {tag.name}
+                            </Badge>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    )}
                     <div>
-                      <p className="mb-2 text-sm text-muted-foreground">模型版本</p>
-                      <p className="font-medium">{PROMPT_DATA.modelVersion}</p>
-                    </div>
-                    <div>
-                      <p className="mb-2 text-sm text-muted-foreground">作者</p>
-                      <div className="flex items-center gap-3">
-                        <Avatar className="h-10 w-10">
-                          <AvatarImage
-                            src={PROMPT_DATA.author.avatar || "/placeholder.svg"}
-                            alt={PROMPT_DATA.author.name}
-                          />
-                          <AvatarFallback>{PROMPT_DATA.author.name[0]}</AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <p className="font-medium">{PROMPT_DATA.author.name}</p>
-                          <p className="text-sm text-muted-foreground">{PROMPT_DATA.author.role}</p>
+                      <p className="mb-2 text-sm text-muted-foreground">统计</p>
+                      <div className="space-y-1 text-sm">
+                        <div className="flex items-center gap-2">
+                          <Eye className="h-3 w-3" />
+                          <span>{prompt.view_count || 0} 次浏览</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Copy className="h-3 w-3" />
+                          <span>{prompt.copy_count || 0} 次复制</span>
                         </div>
                       </div>
                     </div>
+                    {prompt.created_at && (
+                      <div>
+                        <p className="mb-2 text-sm text-muted-foreground">创建时间</p>
+                        <p className="text-sm">
+                          {new Date(prompt.created_at).toLocaleDateString("zh-CN", {
+                            year: "numeric",
+                            month: "long",
+                            day: "numeric",
+                          })}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -340,19 +365,12 @@ export default function PromptDetailPage() {
 
       {/* Mobile Sticky Bottom Bar */}
       <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-background p-4 sm:hidden">
-        <Button onClick={handleCopy} size="lg" className="w-full">
-          {copied ? (
-            <>
-              <Check className="mr-2 h-5 w-5" />
-              已复制！
-            </>
-          ) : (
-            <>
-              <Copy className="mr-2 h-5 w-5" />
-              复制提示词
-            </>
-          )}
-        </Button>
+        <PromptCopyButton
+          content={prompt.content}
+          promptId={prompt.id}
+          className="w-full"
+          size="lg"
+        />
       </div>
 
       <div className="h-20 sm:hidden" />

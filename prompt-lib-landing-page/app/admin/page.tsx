@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { FileText, Tag, Users, Activity, Plus, TrendingUp, Eye } from "lucide-react"
-import { getPrompts, getTags, getUsers, supabase } from "@/lib/supabase"
+import { supabaseAdmin } from "@/lib/supabase"
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState({
@@ -28,12 +28,12 @@ export default function AdminDashboard() {
     try {
       setLoading(true)
 
-      // 并行获取所有数据
+      // 并行获取所有数据 - 使用直接的 Supabase 查询
       const [promptsResult, tagsResult, usersResult, copiesResult] = await Promise.all([
-        getPrompts(),
-        getTags(),
-        getUsers(),
-        supabase.from('copy_events').select('*')
+        supabaseAdmin.from('prompts').select('*'),
+        supabaseAdmin.from('tags').select('*'),
+        supabaseAdmin.from('profiles').select('*'),
+        supabaseAdmin.from('copy_events').select('*')
       ])
 
       // 计算统计数据

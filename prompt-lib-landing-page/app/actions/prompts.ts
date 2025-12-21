@@ -315,10 +315,19 @@ export async function incrementViewCount(id: number) {
     if (error) {
       console.error('Error incrementing view count:', error)
       // Fallback to manual increment if RPC function doesn't exist
-      await supabaseAdmin
+      // First fetch current count, then increment
+      const { data: currentPrompt } = await supabaseAdmin
         .from('prompts')
-        .update({ view_count: supabaseAdmin.raw('view_count + 1') })
+        .select('view_count')
         .eq('id', id)
+        .single()
+
+      if (currentPrompt) {
+        await supabaseAdmin
+          .from('prompts')
+          .update({ view_count: (currentPrompt.view_count || 0) + 1 })
+          .eq('id', id)
+      }
     }
 
     return { success: true, error: null }

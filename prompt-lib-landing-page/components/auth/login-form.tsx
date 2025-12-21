@@ -16,10 +16,10 @@ interface LoginFormProps {
 }
 
 // 简单的硬编码用户验证
-const ADMIN_CREDENTIALS = {
-  username: 'admin',
-  password: 'admin123'
-}
+const VALID_USERS = [
+  { username: 'admin', password: 'admin123', role: 'admin' },
+  { username: 'heiyu', password: '123456', role: 'user' }
+]
 
 export default function LoginForm({ redirectTo }: LoginFormProps) {
   const [loading, setLoading] = useState(false)
@@ -38,14 +38,20 @@ export default function LoginForm({ redirectTo }: LoginFormProps) {
     const username = formData.get('username') as string
     const password = formData.get('password') as string
 
-    // 简单的硬编码验证
-    if (username === ADMIN_CREDENTIALS.username && password === ADMIN_CREDENTIALS.password) {
-      // 模拟登录成功，设置一个简单的localStorage标识
-      localStorage.setItem('isLoggedIn', 'true')
-      localStorage.setItem('userRole', 'admin')
-      localStorage.setItem('username', 'admin')
+    // 验证用户凭据
+    const validUser = VALID_USERS.find(user =>
+      user.username === username && user.password === password
+    )
 
-      router.push(redirectTo || '/admin')
+    if (validUser) {
+      // 模拟登录成功，设置localStorage
+      localStorage.setItem('isLoggedIn', 'true')
+      localStorage.setItem('userRole', validUser.role)
+      localStorage.setItem('username', validUser.username)
+
+      // 根据用户角色跳转到不同页面
+      const redirectPath = validUser.role === 'admin' ? (redirectTo || '/admin') : '/'
+      router.push(redirectPath)
     } else {
       setError('用户名或密码错误')
     }
@@ -108,7 +114,6 @@ export default function LoginForm({ redirectTo }: LoginFormProps) {
                     name="username"
                     type="text"
                     placeholder="请输入用户名"
-                    defaultValue="admin"
                     required
                     disabled={loading}
                   />
@@ -121,7 +126,6 @@ export default function LoginForm({ redirectTo }: LoginFormProps) {
                       name="password"
                       type={showPassword ? 'text' : 'password'}
                       placeholder="请输入密码"
-                      defaultValue="admin123"
                       required
                       disabled={loading}
                     />
@@ -169,7 +173,6 @@ export default function LoginForm({ redirectTo }: LoginFormProps) {
         </CardContent>
         <CardFooter>
           <div className="text-center text-sm text-muted-foreground w-full">
-            <p>账号密码登录：admin / admin123</p>
             <p>GitHub登录需要配置OAuth</p>
           </div>
         </CardFooter>

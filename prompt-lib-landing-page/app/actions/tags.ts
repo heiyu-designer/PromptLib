@@ -244,26 +244,33 @@ export async function deleteTag(id: number) {
 // Get tags with prompt count
 export async function getTagsWithStats() {
   try {
-    const { data, error } = await supabaseAdmin
+    // First get all tags
+    const { data: tags, error: tagsError } = await supabaseAdmin
       .from('tags')
-      .select(`
-        *,
-        prompt_tags(count)
-      `)
+      .select('*')
       .order('name')
 
-    if (error) {
-      console.error('Error fetching tags with stats:', error)
-      return { tags: [], error: error.message }
+    if (tagsError) {
+      console.error('Error fetching tags:', tagsError)
+      return { tags: [], error: tagsError.message }
     }
 
-    // Transform data to include prompt count
-    const tagsWithCount = data?.map(tag => ({
-      ...tag,
-      prompt_count: tag.prompt_tags?.length || 0
-    })) || []
+    // Then get prompt count for each tag
+    const tagsWithCounts = await Promise.all(
+      (tags || []).map(async (tag) => {
+        const { count, error: countError } = await supabaseAdmin
+          .from('prompt_tags')
+          .select('prompt_id', { count: 'exact', head: true })
+          .eq('tag_id', tag.id)
 
-    return { tags: tagsWithCount, error: null }
+        return {
+          ...tag,
+          prompt_count: countError ? 0 : count || 0
+        }
+      })
+    )
+
+    return { tags: tagsWithCounts, error: null }
   } catch (error) {
     console.error('Unexpected error:', error)
     return { tags: [], error: '获取标签统计时发生错误' }
@@ -273,14 +280,8 @@ export async function getTagsWithStats() {
 // Popular tags (by usage)
 export async function getPopularTags(limit = 10) {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('tags')
-      .select(`
-        *,
-        prompt_tags(count)
-      `)
-      .order('created_at', { ascending: false })
-      .limit(limit)
+    // Get tags with stats first
+    const { tags, error } = await getTagsWithStats()
 
     if (error) {
       console.error('Error fetching popular tags:', error)
@@ -288,13 +289,9 @@ export async function getPopularTags(limit = 10) {
     }
 
     // Sort by prompt count and limit
-    const sortedTags = data
-      ?.map(tag => ({
-        ...tag,
-        prompt_count: tag.prompt_tags?.length || 0
-      }))
+    const sortedTags = tags
       .sort((a, b) => b.prompt_count - a.prompt_count)
-      .slice(0, limit) || []
+      .slice(0, limit)
 
     return { tags: sortedTags, error: null }
   } catch (error) {
