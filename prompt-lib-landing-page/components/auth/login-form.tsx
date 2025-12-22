@@ -18,7 +18,8 @@ interface LoginFormProps {
 // 简单的硬编码用户验证
 const VALID_USERS = [
   { username: 'admin', password: 'admin123', role: 'admin' },
-  { username: 'heiyu', password: '123456', role: 'user' }
+  { username: 'heiyu', password: '123456', role: 'user' },
+  { username: 'ziye', password: '123456', role: 'user' }
 ]
 
 export default function LoginForm({ redirectTo }: LoginFormProps) {
