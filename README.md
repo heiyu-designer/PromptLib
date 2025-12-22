@@ -1,30 +1,59 @@
-# AI Prompt Library - 项目说明文档
+# AI Prompt Library
 
-## 📋 项目概述
+> 🚀 **现代化的 AI 提示词管理和展示平台**
 
-AI Prompt Library 是一个基于 Next.js 16 + React 19 + TypeScript 开发的提示词管理和展示平台，提供完整的 B 端管理后台和 C 端用户界面。
+![AI Prompt Library](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.2-blue?style=for-the-badge&logo=typescript)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind-4.0-38B2AC?style=for-the-badge&logo=tailwindcss)
+![Supabase](https://img.shields.io/badge/Supabase-3ECFF8?style=for-the-badge&logo=supabase)
 
-### 🎯 核心功能
-- 提示词库管理和展示
-- 用户认证和权限管理
-- 智能搜索和标签分类
-- 内容详情查看和复制
-- 数据统计和分析
+## 📋 快速开始
 
-## 🏗️ 技术架构
+### 🌟 在线演示
+- **生产环境**: [https://prompt-lib-amber.vercel.app](https://prompt-lib-amber.vercel.app)
+- **测试账号**:
+  - 管理员：`admin` / `admin123`
+  - 普通用户：`heiyu` / `123456`
 
-### 前端技术栈
-- **框架**: Next.js 16 (App Router)
-- **UI 库**: React 19 + TypeScript
-- **样式**: Tailwind CSS 4.0
-- **组件库**: shadcn/ui
-- **图标**: Lucide React
-- **图表**: Recharts 2.15.4
+### 🚀 一键部署
+```bash
+# 克隆项目
+git clone https://github.com/heiyu-designer/PromptLib.git
 
-### 后端服务
-- **数据库**: Supabase (PostgreSQL)
-- **认证**: Supabase Auth + 自定义认证
-- **API**: Next.js API Routes + Server Actions
+# 进入项目目录
+cd PromptDb/prompt-lib-landing-page
+
+# 安装依赖
+npm install
+
+# 启动开发环境
+npm run dev
+```
+
+## 📚 完整文档
+
+| 文档 | 描述 |
+|------|------|
+| 📖 [项目介绍](./PROJECT_INTRODUCTION.md) | 详细的项目架构和功能说明 |
+| 🚀 [完整部署指南](./COMPLETE_DEPLOYMENT_GUIDE.md) | 从零开始的详细部署流程 |
+| ⚙️ [Vercel 部署](./VERCEL_CLI_DEPLOYMENT.md) | Vercel CLI 部署指南 |
+| 🔧 [环境配置](./VERCEL_ENV_FIX.md) | 环境变量配置和问题修复 |
+
+## 🎯 核心功能
+
+### 🏠 用户端功能
+- **提示词浏览**: 网格/列表视图展示所有公开提示词
+- **智能搜索**: 支持标题、内容、标签全文搜索
+- **标签筛选**: 多维度标签组合筛选
+- **详情查看**: Markdown/JSON/YAML 多格式内容渲染
+- **复制功能**: 一键复制提示词到剪贴板
+
+### 👨‍💼 管理端功能
+- **数据仪表板**: 实时统计数据和可视化图表
+- **提示词管理**: 完整的 CRUD 操作和批量处理
+- **标签管理**: 标签创建、编辑和关联管理
+- **用户管理**: 用户权限控制和状态管理
+- **系统设置**: 站点配置和功能开关
 
 ## 🔐 账号信息
 
