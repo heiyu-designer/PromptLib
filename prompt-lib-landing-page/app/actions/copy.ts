@@ -4,6 +4,15 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { supabaseAdmin } from '@/lib/supabase'
 
+// Type assertion to avoid TypeScript issues with Supabase
+declare global {
+  namespace SupabaseTypes {
+    interface Database {
+      public: any
+    }
+  }
+}
+
 // Settings schema
 const settingsSchema = z.object({
   copy_success_message: z.string().min(1, '复制成功消息不能为空').max(200, '消息不能超过200字符'),
@@ -54,9 +63,10 @@ export async function getSettings() {
     }
 
     // Parse settings from JSON if needed
-    const settings = typeof data.settings === 'string'
-      ? JSON.parse(data.settings)
-      : data.settings
+    const settingsData = data as any
+    const settings = typeof settingsData.settings === 'string'
+      ? JSON.parse(settingsData.settings)
+      : settingsData.settings
 
     return { settings: { ...DEFAULT_SETTINGS, ...settings }, error: null }
   } catch (error) {
@@ -82,7 +92,7 @@ export async function updateSettings(settings: Partial<Settings>) {
       .upsert({
         id: 1, // Use a fixed ID for simplicity
         settings: mergedSettings
-      })
+      } as any)
       .select()
       .single()
 

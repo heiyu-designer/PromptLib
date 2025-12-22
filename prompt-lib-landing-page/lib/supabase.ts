@@ -1,10 +1,14 @@
 import { createClient } from '@supabase/supabase-js'
-import { createServerComponentClient } from '@supabase/ssr'
 import { Database } from './database'
 
 // Create a single Supabase client for interacting with your database
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_KEY!
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_KEY
+
+// Validate environment variables
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error('Missing Supabase environment variables. Please check NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_KEY.')
+}
 
 // Single client for all requests (v3 simplification)
 export const supabase = createClient<Database>(supabaseUrl, supabaseKey, {
@@ -16,16 +20,13 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseKey, {
 })
 
 // Admin client with elevated permissions
-export const supabaseAdmin = createClient<Database>(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_KEY!,
-  {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false
-    }
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || supabaseKey
+export const supabaseAdmin = createClient<Database>(supabaseUrl, serviceRoleKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
   }
-)
+})
 
 // Helper functions for common database operations
 
