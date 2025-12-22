@@ -24,25 +24,19 @@ export default function PromptCopyButton({
   const { user } = useAuth()
 
   const handleCopy = async () => {
-    // 检查用户是否已登录
-    const simpleUser = getCurrentUser()
-    const currentUser = simpleUser || user
-
-    if (!currentUser) {
-      // 未登录用户显示友好提示
-      alert("🔒 请先登录后才能复制提示词哦～\n\n登录后即可解锁全部功能，享受完整的 AI 提示词库体验！")
-      return
-    }
-
     try {
       // Copy content to clipboard
       await navigator.clipboard.writeText(content)
       setCopied(true)
 
-      // Track copy event
+      // Get current user info (can be null for anonymous users)
+      const simpleUser = getCurrentUser()
+      const currentUser = simpleUser || user
+
+      // Track copy event (user_id can be null for anonymous users)
       await trackCopy({
         prompt_id: promptId,
-        user_id: currentUser.id,
+        user_id: currentUser?.id,
         user_agent: navigator.userAgent,
         referrer: document.referrer
       })
@@ -62,14 +56,15 @@ export default function PromptCopyButton({
         setTimeout(() => setCopied(false), 2000)
 
         // Still try to track even if clipboard API failed
-        if (currentUser) {
-          trackCopy({
-            prompt_id: promptId,
-            user_id: currentUser.id,
-            user_agent: navigator.userAgent,
-            referrer: document.referrer
-          }).catch(console.error)
-        }
+        const simpleUser = getCurrentUser()
+        const currentUser = simpleUser || user
+
+        trackCopy({
+          prompt_id: promptId,
+          user_id: currentUser?.id,
+          user_agent: navigator.userAgent,
+          referrer: document.referrer
+        }).catch(console.error)
       } catch (fallbackErr) {
         console.error('Fallback copy failed:', fallbackErr)
         alert('复制失败，请手动复制内容')

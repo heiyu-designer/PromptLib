@@ -56,21 +56,16 @@ export function PromptPreviewModal({
   }
 
   const handleCopy = async (content: string, section: string) => {
-    if (!user) {
-      toast.error('请先登录后再复制内容')
-      return
-    }
-
     try {
       setIsCopying(true)
       setCopiedSection(section)
 
       await navigator.clipboard.writeText(content)
 
-      // Track copy event
+      // Track copy event (user_id can be null for anonymous users)
       await trackCopy({
         prompt_id: prompt.id,
-        user_id: user.id,
+        user_id: user?.id || null,
         ip_address: null, // Will be set on server
         user_agent: navigator.userAgent,
         referrer: window.location.origin
@@ -162,11 +157,11 @@ export function PromptPreviewModal({
                 variant="outline"
                 size="sm"
                 onClick={() => handleCopy(prompt.content, 'full')}
-                disabled={isCopying || !user}
+                disabled={isCopying}
                 className="text-xs"
               >
                 <Copy className="w-3 h-3 mr-1" />
-                {copiedSection === 'full' ? '已复制' : user ? '复制全文' : '登录后复制'}
+                {copiedSection === 'full' ? '已复制' : '复制全文'}
               </Button>
             </div>
             <div className="bg-muted/50 rounded-lg p-4 font-mono text-sm whitespace-pre-wrap">

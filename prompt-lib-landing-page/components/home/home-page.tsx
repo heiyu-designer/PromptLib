@@ -251,25 +251,19 @@ export default function HomePage() {
   }
 
   const handleCopy = async (promptId: number, content: string) => {
-    // 检查用户是否已登录
-    const simpleUser = getCurrentUser()
-    const currentUser = simpleUser || user
-
-    if (!currentUser) {
-      // 未登录用户显示友好提示
-      alert("🔒 请先登录后才能复制提示词哦～\n\n登录后即可解锁全部功能，享受完整的 AI 提示词库体验！")
-      return
-    }
-
     try {
       // Copy content to clipboard
       await navigator.clipboard.writeText(content)
       setCopiedId(promptId)
 
-      // Track copy event
+      // Get current user info (can be null for anonymous users)
+      const simpleUser = getCurrentUser()
+      const currentUser = simpleUser || user
+
+      // Track copy event (user_id can be null for anonymous users)
       await trackCopy({
         prompt_id: promptId,
-        user_id: currentUser.id,
+        user_id: currentUser?.id,
         user_agent: navigator.userAgent,
         referrer: document.referrer
       })
