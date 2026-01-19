@@ -30,13 +30,13 @@ export default function ViewModeToggle({
           <Tooltip key={mode}>
             <TooltipTrigger asChild>
               <Button
-                variant={currentMode === mode ? "default" : "ghost"}
+                variant="ghost"
                 size="sm"
                 onClick={() => onModeChange(mode)}
                 className={`h-8 w-8 p-0 transition-all duration-200 ${
                   currentMode === mode
-                    ? "bg-white dark:bg-slate-700 shadow-sm"
-                    : "hover:bg-slate-200 dark:hover:bg-slate-700"
+                    ? "bg-white dark:bg-slate-700 shadow-sm text-slate-900 dark:text-slate-100"
+                    : "bg-transparent hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400"
                 }`}
                 aria-label={label}
               >
