@@ -1,4 +1,31 @@
 // 简单的认证检查工具函数
+
+// 硬编码的用户验证（适合演示）
+const VALID_USERS = [
+  { username: 'admin', password: 'admin123', role: 'admin' },
+  { username: 'heiyu', password: '123456', role: 'user' }
+]
+
+// 简单的认证函数
+export async function simpleAuth(username: string, password: string): Promise<{ success: boolean; user?: { username: string; role: string }; error?: string }> {
+  const validUser = VALID_USERS.find(u => u.username === username && u.password === password)
+
+  if (!validUser) {
+    return { success: false, error: '用户名或密码错误' }
+  }
+
+  // 存储到 localStorage
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('isLoggedIn', 'true')
+    localStorage.setItem('username', validUser.username)
+    localStorage.setItem('userRole', validUser.role)
+  }
+
+  return {
+    success: true,
+    user: { username: validUser.username, role: validUser.role }
+  }
+}
 export function isLoggedIn() {
   if (typeof window === 'undefined') return false
   try {

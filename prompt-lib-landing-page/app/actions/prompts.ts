@@ -1,10 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
 import { z } from 'zod'
-import { supabaseAdmin } from '@/lib/supabase'
-import { Database } from '@/lib/database'
+import { query, queryOne } from '@/lib/server-db'
 
 // Input validation schemas
 const createPromptSchema = z.object({
@@ -49,19 +47,18 @@ export async function getPrompts(params?: {
 
     // If filtering by tag, get matching prompt IDs first
     if (params?.tagId) {
-      const { data: tagRelations, error: tagError } = await supabaseAdmin
-        .from('prompt_tags')
-        .select('prompt_id')
-        .eq('tag_id', params.tagId)
+      const result = await query<{ prompt_id: number }>(
+        'SELECT prompt_id FROM prompt_tags WHERE tag_id = $1',
+        [params.tagId]
+      )
 
-      if (tagError) {
-        console.error('Error fetching tag relations:', tagError)
-        return { prompts: [], total: 0, error: tagError.message }
+      if (result.error) {
+        console.error('Error fetching tag relations:', result.error)
+        return { prompts: [], total: 0, error: String(result.error) }
       }
 
-      filteredPromptIds = tagRelations?.map(relation => relation.prompt_id) || []
+      filteredPromptIds = result.data?.map(r => r.prompt_id) || []
 
-      // If no prompts found for this tag, return empty result
       if (filteredPromptIds.length === 0) {
         return {
           prompts: [],
@@ -73,55 +70,94 @@ export async function getPrompts(params?: {
       }
     }
 
-    let query = supabaseAdmin
-      .from('prompts')
-      .select(`
-        *,
-        author:profiles(username, avatar_url),
-        prompt_tags(
-          tags(id, name, slug, color)
-        )
-      `, { count: 'exact' })
+    // Build the main query
+    let whereConditions: string[] = []
+    let queryParams: any[] = []
+    let paramIndex = 1
 
     // Filter by public status
     if (params?.isPublic !== undefined) {
-      query = query.eq('is_public', params.isPublic)
+      whereConditions.push(`is_public = $${paramIndex}`)
+      queryParams.push(params.isPublic)
+      paramIndex++
     }
 
     // Apply tag filter if we have filtered IDs
     if (filteredPromptIds.length > 0) {
-      query = query.in('id', filteredPromptIds)
+      whereConditions.push(`id = ANY($${paramIndex}::int[])`)
+      queryParams.push(filteredPromptIds)
+      paramIndex++
     }
 
+    // Apply search filter
     if (params?.search) {
-      query = query.or(`title.ilike.%${params.search}%,content.ilike.%${params.search}%`)
+      whereConditions.push(`(title ILIKE $${paramIndex} OR content ILIKE $${paramIndex})`)
+      queryParams.push(`%${params.search}%`)
+      paramIndex++
     }
 
-    // Apply sorting
+    const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : ''
+
+    // Get total count
+    const countResult = await query<{ count: string }>(
+      `SELECT COUNT(*) as count FROM prompts ${whereClause}`,
+      queryParams
+    )
+
+    const total = parseInt(countResult.data?.[0]?.count || '0', 10)
+
+    // Get prompts with related data
     const sortBy = params?.sortBy || 'created_at'
-    const sortOrder = params?.sortOrder || 'desc'
-    query = query.order(sortBy, { ascending: sortOrder === 'asc' })
+    const sortOrder = params?.sortOrder || 'DESC'
+    const orderDirection = sortOrder === 'asc' ? 'ASC' : 'DESC'
 
-    // Apply pagination
-    query = query.range(offset, offset + limit - 1)
+    const promptsQuery = `
+      SELECT
+        p.*,
+        pr.username as author_username,
+        pr.avatar_url as author_avatar_url
+      FROM prompts p
+      LEFT JOIN profiles pr ON p.author_id = pr.id
+      ${whereClause}
+      ORDER BY p.${sortBy} ${orderDirection}
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `
 
-    const { data, error, count } = await query
+    queryParams.push(limit, offset)
 
-    if (error) {
-      console.error('Error fetching prompts:', error)
-      return { prompts: [], total: 0, error: error.message }
+    const promptsResult = await query<any>(promptsQuery, queryParams)
+
+    if (promptsResult.error) {
+      console.error('Error fetching prompts:', promptsResult.error)
+      return { prompts: [], total: 0, error: String(promptsResult.error) }
     }
 
-    // Transform the data to match our expected format
-    const transformedData = data?.map(prompt => ({
-      ...prompt,
-      tags: prompt.prompt_tags?.map(pt => pt.tags).filter(Boolean)
-    })) || []
+    // Fetch tags for each prompt
+    const prompts = await Promise.all(
+      (promptsResult.data || []).map(async (p) => {
+        // Get tags for this prompt
+        const tagsResult = await query<{ id: number; name: string; slug: string; color: string }>(`
+          SELECT t.id, t.name, t.slug, t.color
+          FROM tags t
+          INNER JOIN prompt_tags pt ON t.id = pt.tag_id
+          WHERE pt.prompt_id = $1
+        `, [p.id])
+
+        return {
+          ...p,
+          tags: tagsResult.data || [],
+          author: p.author_username ? {
+            username: p.author_username,
+            avatar_url: p.author_avatar_url
+          } : null
+        }
+      })
+    )
 
     return {
-      prompts: transformedData,
-      total: count || 0,
-      totalPages: Math.ceil((count || 0) / limit),
+      prompts,
+      total,
+      totalPages: Math.ceil(total / limit),
       currentPage: page,
       error: null
     }
@@ -134,30 +170,41 @@ export async function getPrompts(params?: {
 // Get single prompt by ID
 export async function getPromptById(id: number) {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('prompts')
-      .select(`
-        *,
-        author:profiles(username, avatar_url),
-        prompt_tags(
-          tags(id, name, slug, color)
-        )
-      `)
-      .eq('id', id)
-      .single()
+    // Get prompt with author info
+    const promptResult = await queryOne<any>(`
+      SELECT
+        p.*,
+        pr.username as author_username,
+        pr.avatar_url as author_avatar_url
+      FROM prompts p
+      LEFT JOIN profiles pr ON p.author_id = pr.id
+      WHERE p.id = $1
+    `, [id])
 
-    if (error) {
-      console.error('Error fetching prompt:', error)
-      return { prompt: null, error: error.message }
+    if (promptResult.error || !promptResult.data) {
+      console.error('Error fetching prompt:', promptResult.error)
+      return { prompt: null, error: '提示词不存在' }
     }
 
-    // Transform tags to match expected format
-    const transformedData = data ? {
-      ...data,
-      tags: data.prompt_tags?.map(pt => pt.tags).filter(Boolean)
-    } : null
+    // Get tags for this prompt
+    const tagsResult = await query<{ id: number; name: string; slug: string; color: string }>(`
+      SELECT t.id, t.name, t.slug, t.color
+      FROM tags t
+      INNER JOIN prompt_tags pt ON t.id = pt.tag_id
+      WHERE pt.prompt_id = $1
+    `, [id])
 
-    return { prompt: transformedData, error: null }
+    return {
+      prompt: {
+        ...promptResult.data,
+        tags: tagsResult.data || [],
+        author: promptResult.data.author_username ? {
+          username: promptResult.data.author_username,
+          avatar_url: promptResult.data.author_avatar_url
+        } : null
+      },
+      error: null
+    }
   } catch (error) {
     console.error('Unexpected error:', error)
     return { prompt: null, error: '获取提示词时发生错误' }
@@ -170,40 +217,34 @@ export async function createPrompt(input: CreatePromptInput, authorId: string) {
     // Validate input
     const validatedData = createPromptSchema.parse(input)
 
-    // First create the prompt
-    const { data, error } = await supabaseAdmin
-      .from('prompts')
-      .insert({
-        title: validatedData.title,
-        description: validatedData.description,
-        content: validatedData.content,
-        cover_image_url: validatedData.cover_image_url,
-        is_public: validatedData.is_public,
-        author_id: authorId,
-      })
-      .select()
-      .single()
+    // Create the prompt
+    const insertResult = await queryOne<{ id: number }>(`
+      INSERT INTO prompts (title, description, content, cover_image_url, is_public, author_id)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id
+    `, [
+      validatedData.title,
+      validatedData.description,
+      validatedData.content,
+      validatedData.cover_image_url,
+      validatedData.is_public,
+      authorId
+    ])
 
-    if (error) {
-      console.error('Error creating prompt:', error)
-      return { success: false, error: error.message }
+    if (insertResult.error) {
+      console.error('Error creating prompt:', insertResult.error)
+      return { success: false, error: String(insertResult.error) }
     }
 
-    // Then create the tag relationships if any
+    const promptId = insertResult.data?.id
+
+    // Create tag relationships if any
     if (validatedData.tag_ids && validatedData.tag_ids.length > 0) {
-      const tagRelations = validatedData.tag_ids.map(tagId => ({
-        prompt_id: data.id,
-        tag_id: tagId
-      }))
-
-      const { error: tagError } = await supabaseAdmin
-        .from('prompt_tags')
-        .insert(tagRelations)
-
-      if (tagError) {
-        // Rollback the prompt creation if tag insertion fails
-        await supabaseAdmin.from('prompts').delete().eq('id', data.id)
-        return { success: false, error: '创建标签关联失败: ' + tagError.message }
+      for (const tagId of validatedData.tag_ids) {
+        await query(
+          'INSERT INTO prompt_tags (prompt_id, tag_id) VALUES ($1, $2)',
+          [promptId, tagId]
+        )
       }
     }
 
@@ -211,7 +252,7 @@ export async function createPrompt(input: CreatePromptInput, authorId: string) {
     revalidatePath('/')
     revalidatePath('/admin/prompts')
 
-    return { success: true, data, error: null }
+    return { success: true, data: { id: promptId }, error: null }
   } catch (error) {
     if (error instanceof z.ZodError) {
       return { success: false, error: '输入验证失败: ' + error.errors[0].message }
@@ -228,40 +269,62 @@ export async function updatePrompt(input: UpdatePromptInput) {
     const validatedData = updatePromptSchema.parse(input)
     const { id, tag_ids, ...updateFields } = validatedData
 
-    // Update the prompt
-    const { data, error } = await supabaseAdmin
-      .from('prompts')
-      .update(updateFields)
-      .eq('id', id)
-      .select()
-      .single()
+    // Build update query
+    const updateParts: string[] = []
+    const updateValues: any[] = []
+    let paramIndex = 1
 
-    if (error) {
-      console.error('Error updating prompt:', error)
-      return { success: false, error: error.message }
+    if (updateFields.title !== undefined) {
+      updateParts.push(`title = $${paramIndex}`)
+      updateValues.push(updateFields.title)
+      paramIndex++
+    }
+    if (updateFields.description !== undefined) {
+      updateParts.push(`description = $${paramIndex}`)
+      updateValues.push(updateFields.description)
+      paramIndex++
+    }
+    if (updateFields.content !== undefined) {
+      updateParts.push(`content = $${paramIndex}`)
+      updateValues.push(updateFields.content)
+      paramIndex++
+    }
+    if (updateFields.cover_image_url !== undefined) {
+      updateParts.push(`cover_image_url = $${paramIndex}`)
+      updateValues.push(updateFields.cover_image_url)
+      paramIndex++
+    }
+    if (updateFields.is_public !== undefined) {
+      updateParts.push(`is_public = $${paramIndex}`)
+      updateValues.push(updateFields.is_public)
+      paramIndex++
+    }
+
+    if (updateParts.length > 0) {
+      updateValues.push(id)
+      const updateResult = await query(
+        `UPDATE prompts SET ${updateParts.join(', ')} WHERE id = $${paramIndex}`,
+        updateValues
+      )
+
+      if (updateResult.error) {
+        console.error('Error updating prompt:', updateResult.error)
+        return { success: false, error: String(updateResult.error) }
+      }
     }
 
     // Update tag relationships if provided
     if (tag_ids !== undefined) {
       // Delete existing tag relationships
-      await supabaseAdmin
-        .from('prompt_tags')
-        .delete()
-        .eq('prompt_id', id)
+      await query('DELETE FROM prompt_tags WHERE prompt_id = $1', [id])
 
       // Create new tag relationships if any
       if (tag_ids.length > 0) {
-        const tagRelations = tag_ids.map(tagId => ({
-          prompt_id: id,
-          tag_id: tagId
-        }))
-
-        const { error: tagError } = await supabaseAdmin
-          .from('prompt_tags')
-          .insert(tagRelations)
-
-        if (tagError) {
-          return { success: false, error: '更新标签关联失败: ' + tagError.message }
+        for (const tagId of tag_ids) {
+          await query(
+            'INSERT INTO prompt_tags (prompt_id, tag_id) VALUES ($1, $2)',
+            [id, tagId]
+          )
         }
       }
     }
@@ -271,7 +334,7 @@ export async function updatePrompt(input: UpdatePromptInput) {
     revalidatePath(`/prompts/${id}`)
     revalidatePath('/admin/prompts')
 
-    return { success: true, data, error: null }
+    return { success: true, data: { id }, error: null }
   } catch (error) {
     if (error instanceof z.ZodError) {
       return { success: false, error: '输入验证失败: ' + error.errors[0].message }
@@ -284,14 +347,11 @@ export async function updatePrompt(input: UpdatePromptInput) {
 // Delete prompt
 export async function deletePrompt(id: number) {
   try {
-    const { error } = await supabaseAdmin
-      .from('prompts')
-      .delete()
-      .eq('id', id)
+    const result = await query('DELETE FROM prompts WHERE id = $1', [id])
 
-    if (error) {
-      console.error('Error deleting prompt:', error)
-      return { success: false, error: error.message }
+    if (result.error) {
+      console.error('Error deleting prompt:', result.error)
+      return { success: false, error: String(result.error) }
     }
 
     // Revalidate cache
@@ -308,26 +368,14 @@ export async function deletePrompt(id: number) {
 // Increment view count
 export async function incrementViewCount(id: number) {
   try {
-    const { error } = await supabaseAdmin.rpc('increment_view_count', {
-      prompt_id: id
-    })
+    // Try RPC function first, fallback to manual update
+    const result = await query(
+      'UPDATE prompts SET view_count = view_count + 1 WHERE id = $1',
+      [id]
+    )
 
-    if (error) {
-      console.error('Error incrementing view count:', error)
-      // Fallback to manual increment if RPC function doesn't exist
-      // First fetch current count, then increment
-      const { data: currentPrompt } = await supabaseAdmin
-        .from('prompts')
-        .select('view_count')
-        .eq('id', id)
-        .single()
-
-      if (currentPrompt) {
-        await supabaseAdmin
-          .from('prompts')
-          .update({ view_count: (currentPrompt.view_count || 0) + 1 })
-          .eq('id', id)
-      }
+    if (result.error) {
+      console.error('Error incrementing view count:', result.error)
     }
 
     return { success: true, error: null }
@@ -340,14 +388,14 @@ export async function incrementViewCount(id: number) {
 // Toggle prompt public status
 export async function togglePromptStatus(id: number, isPublic: boolean) {
   try {
-    const { error } = await supabaseAdmin
-      .from('prompts')
-      .update({ is_public: !isPublic })
-      .eq('id', id)
+    const result = await query(
+      'UPDATE prompts SET is_public = $1 WHERE id = $2',
+      [!isPublic, id]
+    )
 
-    if (error) {
-      console.error('Error toggling prompt status:', error)
-      return { success: false, error: error.message }
+    if (result.error) {
+      console.error('Error toggling prompt status:', result.error)
+      return { success: false, error: String(result.error) }
     }
 
     // Revalidate cache

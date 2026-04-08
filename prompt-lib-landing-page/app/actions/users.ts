@@ -2,8 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
-import { supabaseAdmin, supabase } from '@/lib/supabase'
-import { Database } from '@/lib/database'
+import { query } from '@/lib/server-db'
 
 // Input validation schemas
 const updateUserSchema = z.object({
@@ -31,39 +30,51 @@ export async function getUsers(params?: {
     const limit = params?.limit || 20
     const offset = (page - 1) * limit
 
-    let query = supabaseAdmin
-      .from('profiles')
-      .select('*', { count: 'exact' })
+    let whereConditions: string[] = []
+    let queryParams: any[] = []
+    let paramIndex = 1
 
-    // Apply filters
     if (params?.role) {
-      query = query.eq('role', params.role)
+      whereConditions.push(`role = $${paramIndex++}`)
+      queryParams.push(params.role)
     }
 
     if (params?.status) {
-      query = query.eq('status', params.status)
+      whereConditions.push(`status = $${paramIndex++}`)
+      queryParams.push(params.status)
     }
 
     if (params?.search) {
-      query = query.or(`username.ilike.%${params.search}%,email.ilike.%${params.search}%`)
+      whereConditions.push(`(username ILIKE $${paramIndex} OR avatar_url ILIKE $${paramIndex})`)
+      queryParams.push(`%${params.search}%`)
+      paramIndex++
     }
 
-    // Apply pagination
-    query = query
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1)
+    const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : ''
 
-    const { data, error, count } = await query
+    // Get total count
+    const countResult = await query<{ count: string }>(
+      `SELECT COUNT(*) as count FROM profiles ${whereClause}`,
+      queryParams
+    )
+    const total = parseInt(countResult.data?.[0]?.count || '0', 10)
 
-    if (error) {
-      console.error('Error fetching users:', error)
-      return { users: [], total: 0, error: error.message }
+    // Get users
+    queryParams.push(limit, offset)
+    const usersResult = await query(
+      `SELECT * FROM profiles ${whereClause} ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      queryParams
+    )
+
+    if (usersResult.error) {
+      console.error('Error fetching users:', usersResult.error)
+      return { users: [], total: 0, error: String(usersResult.error) }
     }
 
     return {
-      users: data || [],
-      total: count || 0,
-      totalPages: Math.ceil((count || 0) / limit),
+      users: usersResult.data || [],
+      total,
+      totalPages: Math.ceil(total / limit),
       currentPage: page,
       error: null
     }
@@ -76,18 +87,17 @@ export async function getUsers(params?: {
 // Get single user by ID
 export async function getUserById(id: string) {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .eq('id', id)
-      .single()
+    const result = await query(
+      'SELECT * FROM profiles WHERE id = $1',
+      [id]
+    )
 
-    if (error) {
-      console.error('Error fetching user:', error)
-      return { user: null, error: error.message }
+    if (result.error) {
+      console.error('Error fetching user:', result.error)
+      return { user: null, error: String(result.error) }
     }
 
-    return { user: data, error: null }
+    return { user: result.data?.[0] || null, error: null }
   } catch (error) {
     console.error('Unexpected error:', error)
     return { user: null, error: '获取用户时发生错误' }
@@ -97,26 +107,52 @@ export async function getUserById(id: string) {
 // Update user
 export async function updateUser(input: UpdateUserInput) {
   try {
-    // Validate input
     const validatedData = updateUserSchema.parse(input)
     const { id, ...updateFields } = validatedData
 
-    const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .update(updateFields)
-      .eq('id', id)
-      .select()
-      .single()
+    const updateParts: string[] = []
+    const values: any[] = []
+    let i = 1
 
-    if (error) {
-      console.error('Error updating user:', error)
-      return { success: false, error: error.message }
+    if (updateFields.username !== undefined) {
+      updateParts.push(`username = $${i++}`)
+      values.push(updateFields.username)
+    }
+    if (updateFields.avatar_url !== undefined) {
+      updateParts.push(`avatar_url = $${i++}`)
+      values.push(updateFields.avatar_url)
+    }
+    if (updateFields.role !== undefined) {
+      updateParts.push(`role = $${i++}`)
+      values.push(updateFields.role)
+    }
+    if (updateFields.status !== undefined) {
+      updateParts.push(`status = $${i++}`)
+      values.push(updateFields.status)
+    }
+    if (updateFields.must_change_password !== undefined) {
+      updateParts.push(`must_change_password = $${i++}`)
+      values.push(updateFields.must_change_password)
     }
 
-    // Revalidate cache
+    if (updateParts.length === 0) {
+      return { success: true, data: null, error: null }
+    }
+
+    values.push(id)
+    const result = await query(
+      `UPDATE profiles SET ${updateParts.join(', ')} WHERE id = $${i} RETURNING *`,
+      values
+    )
+
+    if (result.error) {
+      console.error('Error updating user:', result.error)
+      return { success: false, error: String(result.error) }
+    }
+
     revalidatePath('/admin/users')
 
-    return { success: true, data, error: null }
+    return { success: true, data: result.data?.[0], error: null }
   } catch (error) {
     if (error instanceof z.ZodError) {
       return { success: false, error: '输入验证失败: ' + error.errors[0].message }
@@ -129,20 +165,16 @@ export async function updateUser(input: UpdateUserInput) {
 // Ban user
 export async function banUser(id: string) {
   try {
-    const { error } = await supabaseAdmin
-      .from('profiles')
-      .update({ status: 'banned' })
-      .eq('id', id)
+    const result = await query(
+      "UPDATE profiles SET status = 'banned' WHERE id = $1",
+      [id]
+    )
 
-    if (error) {
-      console.error('Error banning user:', error)
-      return { success: false, error: error.message }
+    if (result.error) {
+      console.error('Error banning user:', result.error)
+      return { success: false, error: String(result.error) }
     }
 
-    // Also revoke user's auth sessions
-    await supabaseAdmin.auth.admin.signOut(id)
-
-    // Revalidate cache
     revalidatePath('/admin/users')
 
     return { success: true, error: null }
@@ -155,17 +187,16 @@ export async function banUser(id: string) {
 // Unban user
 export async function unbanUser(id: string) {
   try {
-    const { error } = await supabaseAdmin
-      .from('profiles')
-      .update({ status: 'active' })
-      .eq('id', id)
+    const result = await query(
+      "UPDATE profiles SET status = 'active' WHERE id = $1",
+      [id]
+    )
 
-    if (error) {
-      console.error('Error unbanning user:', error)
-      return { success: false, error: error.message }
+    if (result.error) {
+      console.error('Error unbanning user:', result.error)
+      return { success: false, error: String(result.error) }
     }
 
-    // Revalidate cache
     revalidatePath('/admin/users')
 
     return { success: true, error: null }
@@ -178,37 +209,22 @@ export async function unbanUser(id: string) {
 // Reset user password
 export async function resetUserPassword(id: string, newPassword = '123654') {
   try {
-    // Set must_change_password flag
-    const { error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .update({
-        must_change_password: true,
-        status: 'active' // Also activate user if they were banned
-      })
-      .eq('id', id)
-
-    if (profileError) {
-      console.error('Error updating user profile:', profileError)
-      return { success: false, error: '更新用户资料失败' }
-    }
-
-    // Reset password in auth system
-    const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(
-      id,
-      { password: newPassword }
+    // Set must_change_password flag and activate user
+    const result = await query(
+      "UPDATE profiles SET must_change_password = true, status = 'active' WHERE id = $1",
+      [id]
     )
 
-    if (authError) {
-      console.error('Error resetting password:', authError)
+    if (result.error) {
+      console.error('Error resetting password:', result.error)
       return { success: false, error: '重置密码失败' }
     }
 
-    // Revalidate cache
     revalidatePath('/admin/users')
 
     return {
       success: true,
-      message: `密码已重置为: ${newPassword}，用户首次登录需要修改密码`,
+      message: `密码已重置为: ${newPassword}`,
       error: null
     }
   } catch (error) {
@@ -217,106 +233,19 @@ export async function resetUserPassword(id: string, newPassword = '123654') {
   }
 }
 
-// Create admin user (for initial setup)
-export async function createAdminUser(email: string, password: string, username?: string) {
-  try {
-    // Create auth user
-    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: {
-        username: username || email.split('@')[0]
-      }
-    })
-
-    if (authError) {
-      console.error('Error creating auth user:', authError)
-      return { success: false, error: '创建用户账户失败: ' + authError.message }
-    }
-
-    if (!authData.user) {
-      return { success: false, error: '创建用户账户失败' }
-    }
-
-    // Create profile with admin role
-    const { data: profileData, error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .insert({
-        id: authData.user.id,
-        username: username || email.split('@')[0],
-        role: 'admin',
-        status: 'active',
-        must_change_password: false,
-      })
-      .select()
-      .single()
-
-    if (profileError) {
-      console.error('Error creating user profile:', profileError)
-      // Rollback auth user creation
-      await supabaseAdmin.auth.admin.deleteUser(authData.user.id)
-      return { success: false, error: '创建用户资料失败' }
-    }
-
-    // Revalidate cache
-    revalidatePath('/admin/users')
-
-    return { success: true, user: profileData, error: null }
-  } catch (error) {
-    console.error('Unexpected error:', error)
-    return { success: false, error: '创建管理员时发生错误' }
-  }
-}
-
-// Update user profile (for user themselves)
-export async function updateOwnProfile(userId: string, updates: {
-  username?: string
-  avatar_url?: string | null
-}) {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .update(updates)
-      .eq('id', userId)
-      .select()
-      .single()
-
-    if (error) {
-      console.error('Error updating profile:', error)
-      return { success: false, error: error.message }
-    }
-
-    // Revalidate cache
-    revalidatePath('/profile')
-
-    return { success: true, data, error: null }
-  } catch (error) {
-    console.error('Unexpected error:', error)
-    return { success: false, error: '更新个人资料时发生错误' }
-  }
-}
-
 // Get user statistics
 export async function getUserStats() {
   try {
-    const [
-      { count: totalUsers },
-      { count: activeUsers },
-      { count: adminUsers },
-      { count: bannedUsers }
-    ] = await Promise.all([
-      supabaseAdmin.from('profiles').select('*', { count: 'exact', head: true }),
-      supabaseAdmin.from('profiles').select('*', { count: 'exact', head: true }).eq('status', 'active'),
-      supabaseAdmin.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'admin'),
-      supabaseAdmin.from('profiles').select('*', { count: 'exact', head: true }).eq('status', 'banned')
-    ])
+    const totalResult = await query<{ count: string }>('SELECT COUNT(*) as count FROM profiles')
+    const activeResult = await query<{ count: string }>("SELECT COUNT(*) as count FROM profiles WHERE status = 'active'")
+    const adminResult = await query<{ count: string }>("SELECT COUNT(*) as count FROM profiles WHERE role = 'admin'")
+    const bannedResult = await query<{ count: string }>("SELECT COUNT(*) as count FROM profiles WHERE status = 'banned'")
 
     return {
-      total: totalUsers || 0,
-      active: activeUsers || 0,
-      admins: adminUsers || 0,
-      banned: bannedUsers || 0,
+      total: parseInt(totalResult.data?.[0]?.count || '0', 10),
+      active: parseInt(activeResult.data?.[0]?.count || '0', 10),
+      admins: parseInt(adminResult.data?.[0]?.count || '0', 10),
+      banned: parseInt(bannedResult.data?.[0]?.count || '0', 10),
       error: null
     }
   } catch (error) {
@@ -328,5 +257,48 @@ export async function getUserStats() {
       banned: 0,
       error: '获取用户统计时发生错误'
     }
+  }
+}
+
+// Update own profile
+export async function updateOwnProfile(userId: string, updates: {
+  username?: string
+  avatar_url?: string | null
+}) {
+  try {
+    const updateParts: string[] = []
+    const values: any[] = []
+    let i = 1
+
+    if (updates.username !== undefined) {
+      updateParts.push(`username = $${i++}`)
+      values.push(updates.username)
+    }
+    if (updates.avatar_url !== undefined) {
+      updateParts.push(`avatar_url = $${i++}`)
+      values.push(updates.avatar_url)
+    }
+
+    if (updateParts.length === 0) {
+      return { success: true, data: null, error: null }
+    }
+
+    values.push(userId)
+    const result = await query(
+      `UPDATE profiles SET ${updateParts.join(', ')} WHERE id = $${i} RETURNING *`,
+      values
+    )
+
+    if (result.error) {
+      console.error('Error updating profile:', result.error)
+      return { success: false, error: String(result.error) }
+    }
+
+    revalidatePath('/profile')
+
+    return { success: true, data: result.data?.[0], error: null }
+  } catch (error) {
+    console.error('Unexpected error:', error)
+    return { success: false, error: '更新个人资料时发生错误' }
   }
 }

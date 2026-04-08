@@ -1,0 +1,26 @@
+# Docker Compose 配置 - PromptLib 数据库
+# 使用: docker-compose up -d
+
+services:
+  db:
+    image: postgres:15
+    container_name: promptlib-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: promptlib123
+      POSTGRES_DB: promptlib
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

@@ -1,138 +1,74 @@
-import { createClient } from '@supabase/supabase-js'
-import { Database } from './database'
+'use server'
 
-// Create a single Supabase client for interacting with your database
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_KEY
+// Server-side database module
+// Functions exported from this file are Server Actions
 
-// Validate environment variables
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error('Missing Supabase environment variables. Please check NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_KEY.')
+import { query, queryOne } from '@/lib/server-db'
+import { revalidatePath } from 'next/cache'
+
+// Database helper functions
+export async function getTags() {
+  return query<{
+    id: number
+    name: string
+    slug: string
+    color: string
+    created_at: string
+  }>('SELECT * FROM tags ORDER BY name')
 }
 
-// Single client for all requests (v3 simplification)
-export const supabase = createClient<Database>(supabaseUrl, supabaseKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: false, // Disable automatic detection to prevent conflicts
-  },
-})
+export async function getPromptsForAdmin() {
+  const result = await query<any>(`
+    SELECT
+      p.*,
+      pr.username as author_username,
+      pr.avatar_url as author_avatar_url
+    FROM prompts p
+    LEFT JOIN profiles pr ON p.author_id = pr.id
+    ORDER BY p.created_at DESC
+  `)
 
-// Admin client with elevated permissions
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || supabaseKey
-export const supabaseAdmin = createClient<Database>(supabaseUrl, serviceRoleKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false
-  }
-})
+  if (result.error) return { data: [], error: result.error }
 
-// Helper functions for common database operations
+  const prompts = await Promise.all(
+    (result.data || []).map(async (p) => {
+      const tagsResult = await query<{ id: number; name: string; slug: string; color: string }>(`
+        SELECT t.id, t.name, t.slug, t.color
+        FROM tags t
+        INNER JOIN prompt_tags pt ON t.id = pt.tag_id
+        WHERE pt.prompt_id = $1
+      `, [p.id])
 
-// User profile operations
-export async function getCurrentUser() {
-  const { data: { user }, error } = await supabase.auth.getUser()
-  if (error || !user) return null
+      return {
+        ...p,
+        tags: tagsResult.data || [],
+        author: p.author_username ? {
+          username: p.author_username,
+          avatar_url: p.author_avatar_url
+        } : null
+      }
+    })
+  )
 
-  // Fetch user profile with role information
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .single()
-
-  return { ...user, profile }
+  return { data: prompts, error: null }
 }
 
-export async function updateUserProfile(userId: string, updates: Partial<Database['public']['Tables']['profiles']['Update']>) {
-  const { data, error } = await supabaseAdmin
-    .from('profiles')
-    .update(updates)
-    .eq('id', userId)
-    .select()
-    .single()
-
-  return { data, error }
+export async function getUsers() {
+  return query<{
+    id: string
+    username: string | null
+    avatar_url: string | null
+    role: string
+    status: string
+    must_change_password: boolean
+    created_at: string
+  }>('SELECT * FROM profiles ORDER BY created_at DESC')
 }
 
-// Prompt operations
-export async function getPrompts(params?: {
-  limit?: number
-  offset?: number
-  tagId?: number
-  search?: string
-  sortBy?: 'created_at' | 'title' | 'view_count'
-  sortOrder?: 'asc' | 'desc'
-}) {
-  let query = supabase
-    .from('prompts')
-    .select(`
-      *,
-      author:profiles(username, avatar_url),
-      prompt_tags(
-        tags(id, name, slug, color)
-      )
-    `)
-    .eq('is_public', true)
-
-  // Apply filters
-  if (params?.tagId) {
-    query = query.eq('prompt_tags.tag_id', params.tagId)
-  }
-
-  if (params?.search) {
-    query = query.or(`title.ilike.%${params.search}%,content.ilike.%${params.search}%`)
-  }
-
-  // Apply sorting
-  const sortBy = params?.sortBy || 'created_at'
-  const sortOrder = params?.sortOrder || 'desc'
-  query = query.order(sortBy, { ascending: sortOrder === 'asc' })
-
-  // Apply pagination
-  if (params?.limit) {
-    query = query.limit(params.limit)
-  }
-  if (params?.offset) {
-    query = query.offset(params.offset)
-  }
-
-  const { data, error } = await query
-
-  // Transform the data to match our expected format
-  const transformedData = data?.map(prompt => ({
-    ...prompt,
-    tags: prompt.prompt_tags?.map(pt => pt.tags).filter(Boolean)
-  }))
-
-  return { data: transformedData, error }
-}
-
-export async function getPromptById(id: number) {
-  const { data, error } = await supabase
-    .from('prompts')
-    .select(`
-      *,
-      author:profiles(username, avatar_url),
-      prompt_tags(
-        tags(id, name, slug, color)
-      )
-    `)
-    .eq('id', id)
-    .eq('is_public', true)
-    .single()
-
-  if (data) {
-    // Transform tags to match expected format
-    const transformedData = {
-      ...data,
-      tags: data.prompt_tags?.map(pt => pt.tags).filter(Boolean)
-    }
-    return { data: transformedData, error }
-  }
-
-  return { data, error }
+export async function getProfiles() {
+  return query<{ id: string; username: string }>(
+    'SELECT id, username FROM profiles ORDER BY username'
+  )
 }
 
 export async function createPrompt(prompt: {
@@ -144,41 +80,36 @@ export async function createPrompt(prompt: {
   author_id: string
   tag_ids?: number[]
 }) {
-  // First create the prompt
-  const { data, error } = await supabaseAdmin
-    .from('prompts')
-    .insert({
-      title: prompt.title,
-      description: prompt.description,
-      content: prompt.content,
-      cover_image_url: prompt.cover_image_url,
-      is_public: prompt.is_public ?? true,
-      author_id: prompt.author_id,
-    })
-    .select()
-    .single()
+  const insertResult = await queryOne<{ id: number }>(`
+    INSERT INTO prompts (title, description, content, cover_image_url, is_public, author_id)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id
+  `, [
+    prompt.title,
+    prompt.description,
+    prompt.content,
+    prompt.cover_image_url,
+    prompt.is_public ?? true,
+    prompt.author_id
+  ])
 
-  if (error || !data || !prompt.tag_ids?.length) {
-    return { data, error }
+  if (insertResult.error) return { error: insertResult.error }
+
+  const promptId = insertResult.data?.id
+
+  if (prompt.tag_ids && prompt.tag_ids.length > 0) {
+    for (const tagId of prompt.tag_ids) {
+      await query(
+        'INSERT INTO prompt_tags (prompt_id, tag_id) VALUES ($1, $2)',
+        [promptId, tagId]
+      )
+    }
   }
 
-  // Then create the tag relationships
-  const tagRelations = prompt.tag_ids.map(tagId => ({
-    prompt_id: data.id,
-    tag_id: tagId
-  }))
+  revalidatePath('/admin/prompts')
+  revalidatePath('/')
 
-  const { error: tagError } = await supabaseAdmin
-    .from('prompt_tags')
-    .insert(tagRelations)
-
-  if (tagError) {
-    // Rollback the prompt creation if tag insertion fails
-    await supabaseAdmin.from('prompts').delete().eq('id', data.id)
-    return { data: null, error: tagError }
-  }
-
-  return { data, error: null }
+  return { data: { id: promptId }, error: null }
 }
 
 export async function updatePrompt(id: number, updates: {
@@ -189,291 +120,114 @@ export async function updatePrompt(id: number, updates: {
   is_public?: boolean
   tag_ids?: number[]
 }) {
-  // Update the prompt
-  const { data, error } = await supabaseAdmin
-    .from('prompts')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single()
+  const updateParts: string[] = []
+  const values: any[] = []
+  let i = 1
 
-  if (error) {
-    return { data, error }
+  if (updates.title !== undefined) {
+    updateParts.push(`title = $${i++}`)
+    values.push(updates.title)
+  }
+  if (updates.description !== undefined) {
+    updateParts.push(`description = $${i++}`)
+    values.push(updates.description)
+  }
+  if (updates.content !== undefined) {
+    updateParts.push(`content = $${i++}`)
+    values.push(updates.content)
+  }
+  if (updates.cover_image_url !== undefined) {
+    updateParts.push(`cover_image_url = $${i++}`)
+    values.push(updates.cover_image_url)
+  }
+  if (updates.is_public !== undefined) {
+    updateParts.push(`is_public = $${i++}`)
+    values.push(updates.is_public)
   }
 
-  // Update tag relationships if provided
-  if (updates.tag_ids) {
-    // Delete existing tag relationships
-    await supabaseAdmin
-      .from('prompt_tags')
-      .delete()
-      .eq('prompt_id', id)
+  if (updateParts.length > 0) {
+    values.push(id)
+    const result = await query(
+      `UPDATE prompts SET ${updateParts.join(', ')} WHERE id = $${i}`,
+      values
+    )
+    if (result.error) return { error: result.error }
+  }
 
-    // Create new tag relationships
-    if (updates.tag_ids.length > 0) {
-      const tagRelations = updates.tag_ids.map(tagId => ({
-        prompt_id: id,
-        tag_id: tagId
-      }))
-
-      const { error: tagError } = await supabaseAdmin
-        .from('prompt_tags')
-        .insert(tagRelations)
-
-      if (tagError) {
-        return { data: null, error: tagError }
-      }
+  if (updates.tag_ids !== undefined) {
+    await query('DELETE FROM prompt_tags WHERE prompt_id = $1', [id])
+    for (const tagId of updates.tag_ids) {
+      await query(
+        'INSERT INTO prompt_tags (prompt_id, tag_id) VALUES ($1, $2)',
+        [id, tagId]
+      )
     }
   }
 
-  return { data, error: null }
+  revalidatePath('/admin/prompts')
+  revalidatePath(`/prompts/${id}`)
+  revalidatePath('/')
+
+  return { data: { id }, error: null }
 }
 
 export async function deletePrompt(id: number) {
-  const { error } = await supabaseAdmin
-    .from('prompts')
-    .delete()
-    .eq('id', id)
-
-  return { error }
+  const result = await query('DELETE FROM prompts WHERE id = $1', [id])
+  revalidatePath('/admin/prompts')
+  revalidatePath('/')
+  return result
 }
 
-// Tag operations
-export async function getTags() {
-  const { data, error } = await supabase
-    .from('tags')
-    .select('*')
-    .order('name')
-
-  return { data, error }
-}
-
-export async function createTag(tag: {
-  name: string
-  slug: string
-  color?: string
+export async function updateProfile(id: string, updates: {
+  username?: string
+  role?: string
+  status?: string
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('tags')
-    .insert(tag)
-    .select()
-    .single()
+  const updateParts: string[] = []
+  const values: any[] = []
+  let i = 1
 
-  return { data, error }
-}
-
-export async function updateTag(id: number, updates: Partial<Database['public']['Tables']['tags']['Update']>) {
-  const { data, error } = await supabaseAdmin
-    .from('tags')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single()
-
-  return { data, error }
-}
-
-export async function deleteTag(id: number) {
-  // First check if tag is being used by any prompts
-  const { data: usage } = await supabaseAdmin
-    .from('prompt_tags')
-    .select('prompt_id')
-    .eq('tag_id', id)
-    .limit(1)
-
-  if (usage && usage.length > 0) {
-    return { error: new Error('Cannot delete tag that is in use by prompts') }
+  if (updates.username !== undefined) {
+    updateParts.push(`username = $${i++}`)
+    values.push(updates.username)
+  }
+  if (updates.role !== undefined) {
+    updateParts.push(`role = $${i++}`)
+    values.push(updates.role)
+  }
+  if (updates.status !== undefined) {
+    updateParts.push(`status = $${i++}`)
+    values.push(updates.status)
   }
 
-  const { error } = await supabaseAdmin
-    .from('tags')
-    .delete()
-    .eq('id', id)
+  if (updateParts.length === 0) return { data: null, error: null }
 
-  return { error }
+  values.push(id)
+  const result = await query(
+    `UPDATE profiles SET ${updateParts.join(', ')} WHERE id = $${i} RETURNING *`,
+    values
+  )
+
+  revalidatePath('/admin/users')
+
+  return result
 }
 
-// Analytics operations
-export async function incrementViewCount(promptId: number) {
-  const { error } = await supabase.rpc('increment_view_count', {
-    prompt_id: promptId
-  })
-
-  return { error }
-}
-
-// User management (admin only)
-export async function getUsers() {
-  const { data, error } = await supabaseAdmin
-    .from('profiles')
-    .select('*')
-    .order('created_at', { ascending: false })
-
-  return { data, error }
-}
-
-export async function banUser(userId: string) {
-  return updateUserProfile(userId, { status: 'banned' })
-}
-
-export async function unbanUser(userId: string) {
-  return updateUserProfile(userId, { status: 'active' })
-}
-
-export async function resetUserPassword(userId: string) {
-  // This would typically involve sending a password reset email
-  // For now, we'll just set the must_change_password flag
-  return updateUserProfile(userId, {
-    must_change_password: true
-  })
-}
-
-// Create new user
-export async function createUser(userData: {
+export async function createProfile(profile: {
   username: string
-  email: string
   role: 'admin' | 'user'
-  password: string
 }) {
-  try {
-    // Generate a proper UUID-like string that PostgreSQL will accept
-    // Using a pattern that looks like a UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-    const generateUUID = () => {
-      const hex = Math.random().toString(16).substr(2, 8)
-      const hex2 = Math.random().toString(16).substr(2, 4)
-      const hex3 = Math.random().toString(16).substr(2, 4)
-      const hex4 = Math.random().toString(16).substr(2, 4)
-      const hex5 = Math.random().toString(16).substr(2, 12)
-      return `${hex}-${hex2}-${hex3}-${hex4}-${hex5}`
-    }
+  const userId = crypto.randomUUID()
+  const result = await query<{ id: string }>(
+    'INSERT INTO profiles (id, username, role, status) VALUES ($1, $2, $3, $4) RETURNING id',
+    [userId, profile.username, profile.role, 'active']
+  )
 
-    const userId = generateUUID()
+  revalidatePath('/admin/users')
 
-    // First create profile entry
-    const { error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .insert({
-        id: userId,
-        username: userData.username,
-        role: userData.role,
-        status: 'active'
-        // 移除 updated_at，因为数据库表中可能没有这个字段
-      })
-
-    if (profileError) {
-      return { error: profileError }
-    }
-
-    // Return success - in a real implementation, you would also create the auth user
-    // For now, we'll just create the profile record
-    return {
-      data: {
-        id: userId,
-        username: userData.username,
-        role: userData.role,
-        status: 'active'
-      },
-      error: null
-    }
-  } catch (error) {
-    return { error }
-  }
+  return result
 }
 
-// Reset user password to new password
-export async function resetPassword(userId: string, newPassword: string) {
-  try {
-    console.log('开始重置密码，用户ID:', userId)
-
-    // 首先测试数据库连接
-    const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .limit(1)
-
-    console.log('数据库连接测试结果:', { data, error })
-
-    if (error) {
-      console.error('数据库连接失败:', error)
-      // 如果 profiles 表不存在，我们创建一个模拟的成功响应
-      if (error.message.includes('relation') && error.message.includes('does not exist')) {
-        console.log('profiles 表不存在，返回模拟成功响应')
-        return {
-          data: {
-            message: `密码重置操作已记录（演示模式）。用户ID: ${userId}，新密码: ${newPassword}`,
-            user_id: userId,
-            note: '这是演示响应，因为数据库中还没有 profiles 表'
-          },
-          error: null
-        }
-      }
-      return { error: new Error(`数据库连接失败: ${error.message}`) }
-    }
-
-    // 如果数据库连接正常，继续原有逻辑
-    const { data: profiles, error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .select('id, username')
-      .eq('id', userId)
-
-    console.log('查询用户结果:', { profiles, profileError })
-
-    if (profileError) {
-      console.error('查询用户失败:', profileError)
-      return { error: new Error(`查询用户失败: ${profileError.message}`) }
-    }
-
-    if (!profiles || profiles.length === 0) {
-      console.error('用户不存在')
-      return { error: new Error('用户不存在') }
-    }
-
-    const profile = profiles[0]
-    console.log('找到用户:', profile)
-
-    // 尝试更新用户 - 不使用 updated_at 字段，因为数据库表中可能没有这个字段
-    const { error: updateError } = await supabaseAdmin
-      .from('profiles')
-      .update({
-        must_change_password: true
-        // 移除 updated_at，因为数据库表中可能没有这个字段
-      })
-      .eq('id', userId)
-
-    console.log('更新用户结果:', { updateError })
-
-    if (updateError) {
-      console.error('更新用户失败:', updateError)
-      // 如果字段不存在，我们仍然返回成功，因为核心功能已经完成
-      if (updateError.message.includes('column') && updateError.message.includes('does not exist')) {
-        console.log('字段不存在，但重置操作已记录')
-        const successMessage = `用户 ${profile.username} 的密码重置操作已记录！新密码: ${newPassword} (注意：数据库表缺少某些字段，但核心功能已完成)`
-
-        return {
-          data: {
-            message: successMessage,
-            user_id: userId
-          },
-          error: null
-        }
-      }
-      return { error: new Error(`更新用户失败: ${updateError.message}`) }
-    }
-
-    // 返回成功信息
-    const successMessage = `用户 ${profile.username} 的密码重置成功！新密码: ${newPassword} (演示：在生产环境中，新密码会通过邮件发送)`
-
-    console.log('密码重置成功:', successMessage)
-
-    return {
-      data: {
-        message: successMessage,
-        user_id: userId
-      },
-      error: null
-    }
-  } catch (error: any) {
-    console.error('重置密码异常:', error)
-    return { error: new Error(`重置密码失败: ${error.message || error}`) }
-  }
-}
+// 兼容导出 - 供客户端组件使用（但不包含任何实际功能）
+export const supabase = {}
+export const supabaseAdmin = {}

@@ -2,16 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
-import { supabaseAdmin } from '@/lib/supabase'
-
-// Type assertion to avoid TypeScript issues with Supabase
-declare global {
-  namespace SupabaseTypes {
-    interface Database {
-      public: any
-    }
-  }
-}
+import { query } from '@/lib/server-db'
 
 // Settings schema
 const settingsSchema = z.object({
@@ -44,29 +35,23 @@ const DEFAULT_SETTINGS: Settings = {
 // Get current settings
 export async function getSettings() {
   try {
-    // For now, we'll store settings in a simple key-value format
-    // In a real application, you might want a dedicated settings table
+    const result = await query<{ settings: Settings }>(
+      'SELECT settings FROM settings WHERE id = 1'
+    )
 
-    const { data, error } = await supabaseAdmin
-      .from('settings')
-      .select('*')
-      .single()
-
-    if (error && error.code !== 'PGRST116') { // PGRST116 is "not found"
-      console.error('Error fetching settings:', error)
-      return { settings: DEFAULT_SETTINGS, error: error.message }
+    if (result.error) {
+      console.error('Error fetching settings:', result.error)
+      return { settings: DEFAULT_SETTINGS, error: String(result.error) }
     }
 
-    // If no settings found, return defaults
-    if (!data) {
+    if (!result.data || result.data.length === 0) {
       return { settings: DEFAULT_SETTINGS, error: null }
     }
 
-    // Parse settings from JSON if needed
-    const settingsData = data as any
-    const settings = typeof settingsData.settings === 'string'
-      ? JSON.parse(settingsData.settings)
-      : settingsData.settings
+    const settingsData = result.data[0].settings
+    const settings = typeof settingsData === 'string'
+      ? JSON.parse(settingsData)
+      : settingsData
 
     return { settings: { ...DEFAULT_SETTINGS, ...settings }, error: null }
   } catch (error) {
@@ -83,22 +68,18 @@ export async function updateSettings(settings: Partial<Settings>) {
 
     // Get current settings first
     const { settings: currentSettings } = await getSettings()
-
     const mergedSettings = { ...currentSettings, ...validatedData }
 
     // Upsert settings
-    const { data, error } = await supabaseAdmin
-      .from('settings')
-      .upsert({
-        id: 1, // Use a fixed ID for simplicity
-        settings: mergedSettings
-      } as any)
-      .select()
-      .single()
+    const result = await query(
+      `INSERT INTO settings (id, settings) VALUES (1, $1)
+       ON CONFLICT (id) DO UPDATE SET settings = $1`,
+      [JSON.stringify(mergedSettings)]
+    )
 
-    if (error) {
-      console.error('Error updating settings:', error)
-      return { success: false, error: error.message }
+    if (result.error) {
+      console.error('Error updating settings:', result.error)
+      return { success: false, error: String(result.error) }
     }
 
     // Revalidate cache
@@ -118,28 +99,28 @@ export async function updateSettings(settings: Partial<Settings>) {
 export async function trackCopy(event: CopyEventData) {
   try {
     // Create copy tracking record
-    const { error } = await supabaseAdmin
-      .from('copy_events')
-      .insert({
-        prompt_id: event.prompt_id,
-        user_id: event.user_id || null,
-        ip_address: event.ip_address || null,
-        user_agent: event.user_agent || null,
-        referrer: event.referrer || null
-      })
+    const result = await query(
+      `INSERT INTO copy_events (prompt_id, user_id, ip_address, user_agent, referrer)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        event.prompt_id,
+        event.user_id || null,
+        event.ip_address || null,
+        event.user_agent || null,
+        event.referrer || null
+      ]
+    )
 
-    if (error) {
-      console.error('Error tracking copy event:', error)
-      return { success: false, error: error.message }
+    if (result.error) {
+      console.error('Error tracking copy event:', result.error)
+      return { success: false, error: String(result.error) }
     }
 
-    // Increment prompt copy count (if you have this field)
-    await supabaseAdmin.rpc('increment_copy_count', {
-      prompt_id: event.prompt_id
-    }).catch(() => {
-      // Fallback if RPC function doesn't exist
-      console.log('Copy tracking RPC function not found, skipping count increment')
-    })
+    // Increment prompt copy count
+    await query(
+      'UPDATE prompts SET copy_count = copy_count + 1 WHERE id = $1',
+      [event.prompt_id]
+    )
 
     return { success: true, error: null }
   } catch (error) {
@@ -151,33 +132,35 @@ export async function trackCopy(event: CopyEventData) {
 // Get copy statistics
 export async function getCopyStats(promptId?: number, days = 30) {
   try {
-    let query = supabaseAdmin
-      .from('copy_events')
-      .select('*', { count: 'exact' })
-
-    // Filter by prompt ID if provided
-    if (promptId) {
-      query = query.eq('prompt_id', promptId)
-    }
-
-    // Filter by date range
     const startDate = new Date()
     startDate.setDate(startDate.getDate() - days)
 
-    query = query
-      .gte('created_at', startDate.toISOString())
-      .order('created_at', { ascending: false })
+    let sql = 'SELECT * FROM copy_events WHERE created_at >= $1'
+    const params: any[] = [startDate.toISOString()]
 
-    const { data, error, count } = await query
-
-    if (error) {
-      console.error('Error fetching copy stats:', error)
-      return { stats: null, error: error.message }
+    if (promptId) {
+      sql += ' AND prompt_id = $2'
+      params.push(promptId)
     }
 
-    // Calculate additional stats
-    const uniqueUsers = new Set(data?.map(event => event.user_id).filter(Boolean))
-    const dailyStats = data?.reduce((acc, event) => {
+    sql += ' ORDER BY created_at DESC'
+
+    const result = await query<{
+      id: number
+      prompt_id: number
+      user_id: string | null
+      ip_address: string | null
+      created_at: string
+    }>(sql, params)
+
+    if (result.error) {
+      console.error('Error fetching copy stats:', result.error)
+      return { stats: null, error: String(result.error) }
+    }
+
+    const data = result.data || []
+    const uniqueUsers = new Set(data.map(event => event.user_id).filter(Boolean))
+    const dailyStats = data.reduce((acc, event) => {
       const date = event.created_at.split('T')[0]
       acc[date] = (acc[date] || 0) + 1
       return acc
@@ -185,7 +168,7 @@ export async function getCopyStats(promptId?: number, days = 30) {
 
     return {
       stats: {
-        totalCopies: count || 0,
+        totalCopies: data.length,
         uniqueUsers: uniqueUsers.size,
         dailyStats: dailyStats || {},
         promptId,
@@ -199,51 +182,18 @@ export async function getCopyStats(promptId?: number, days = 30) {
   }
 }
 
-// Get popular prompts by copy count
-export async function getPopularPromptsByCopies(limit = 10, days = 30) {
-  try {
-    // This query would be more efficient with a proper materialized view
-    // but for simplicity, we'll use a basic approach
-
-    const startDate = new Date()
-    startDate.setDate(startDate.getDate() - days)
-
-    const { data, error } = await supabaseAdmin
-      .from('copy_events')
-      .select(`
-        prompt_id,
-        prompts(title, created_at),
-        count
-      `)
-      .gte('created_at', startDate.toISOString())
-      .order('count', { ascending: false })
-      .limit(limit)
-
-    if (error) {
-      console.error('Error fetching popular prompts:', error)
-      return { prompts: [], error: error.message }
-    }
-
-    return { prompts: data || [], error: null }
-  } catch (error) {
-    console.error('Unexpected error:', error)
-    return { prompts: [], error: '获取热门提示词时发生错误' }
-  }
-}
-
-// Initialize settings table (run this once during setup)
+// Initialize settings table
 export async function initializeSettings() {
   try {
-    const { error } = await supabaseAdmin
-      .from('settings')
-      .upsert({
-        id: 1,
-        settings: DEFAULT_SETTINGS
-      })
+    const result = await query(
+      `INSERT INTO settings (id, settings) VALUES (1, $1)
+       ON CONFLICT (id) DO NOTHING`,
+      [JSON.stringify(DEFAULT_SETTINGS)]
+    )
 
-    if (error) {
-      console.error('Error initializing settings:', error)
-      return { success: false, error: error.message }
+    if (result.error) {
+      console.error('Error initializing settings:', result.error)
+      return { success: false, error: String(result.error) }
     }
 
     return { success: true, error: null }

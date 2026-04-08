@@ -23,6 +23,52 @@ import { supabaseAdmin } from "@/lib/supabase"
 import type { Database } from "@/lib/database"
 import { getCurrentUser } from "@/lib/simple-auth"
 
+// Re-export for backward compatibility
+import { getTags, getPromptsForAdmin, createPrompt, updatePrompt, deletePrompt } from "@/lib/supabase"
+
+// Override supabaseAdmin calls with server actions
+const adminDB = {
+  from: (table: string) => ({
+    select: (query?: string) => ({
+      then: async (cb: (result: { data: any[]; error: any }) => void) => {
+        if (table === 'prompts') {
+          const result = await getPromptsForAdmin()
+          cb({ data: result.data || [], error: result.error })
+        } else if (table === 'tags') {
+          const result = await getTags()
+          cb({ data: result.data || [], error: result.error })
+        } else if (table === 'profiles') {
+          cb({ data: [], error: null })
+        }
+        return { data: [], error: null }
+      }
+    }),
+    insert: (data: any) => ({
+      select: () => ({
+        single: async () => {
+          const result = await createPrompt(data)
+          return { data: result.data, error: result.error }
+        }
+      })
+    }),
+    update: (data: any) => ({
+      eq: (field: string, value: any) => ({
+        select: () => ({
+          single: async () => {
+            const result = await updatePrompt(value, data)
+            return { data: result.data, error: result.error }
+          }
+        })
+      })
+    }),
+    delete: () => ({
+      eq: async (field: string, value: any) => {
+        return await deletePrompt(value)
+      }
+    })
+  })
+}
+
 type Prompt = Database['public']['Tables']['prompts']['Row'] & {
   tags?: Array<{ id: number; name: string; slug: string; color: string }>
 }

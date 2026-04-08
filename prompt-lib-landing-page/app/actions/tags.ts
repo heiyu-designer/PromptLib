@@ -2,15 +2,14 @@
 
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
-import { supabaseAdmin } from '@/lib/supabase'
-import { Database } from '@/lib/database'
+import { query } from '@/lib/server-db'
 
 // Input validation schemas
 const createTagSchema = z.object({
   name: z.string().min(1, '标签名称不能为空').max(50, '标签名称不能超过50字符'),
   slug: z.string().min(1, 'URL别名不能为空').max(50, 'URL别名不能超过50字符')
     .regex(/^[a-z0-9-]+$/, 'URL别名只能包含小写字母、数字和连字符'),
-  color: z.string().optional().default('blue'),
+  color: z.string().optional(),
 })
 
 const updateTagSchema = z.object({
@@ -28,17 +27,20 @@ type UpdateTagInput = z.infer<typeof updateTagSchema>
 // Get all tags
 export async function getTags() {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('tags')
-      .select('*')
-      .order('name')
+    const result = await query<{
+      id: number
+      name: string
+      slug: string
+      color: string
+      created_at: string
+    }>('SELECT * FROM tags ORDER BY name')
 
-    if (error) {
-      console.error('Error fetching tags:', error)
-      return { tags: [], error: error.message }
+    if (result.error) {
+      console.error('Error fetching tags:', result.error)
+      return { tags: [], error: String(result.error) }
     }
 
-    return { tags: data || [], error: null }
+    return { tags: result.data || [], error: null }
   } catch (error) {
     console.error('Unexpected error:', error)
     return { tags: [], error: '获取标签时发生错误' }
@@ -48,18 +50,20 @@ export async function getTags() {
 // Get single tag by ID
 export async function getTagById(id: number) {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('tags')
-      .select('*')
-      .eq('id', id)
-      .single()
+    const result = await query<{
+      id: number
+      name: string
+      slug: string
+      color: string
+      created_at: string
+    }>('SELECT * FROM tags WHERE id = $1', [id])
 
-    if (error) {
-      console.error('Error fetching tag:', error)
-      return { tag: null, error: error.message }
+    if (result.error) {
+      console.error('Error fetching tag:', result.error)
+      return { tag: null, error: String(result.error) }
     }
 
-    return { tag: data, error: null }
+    return { tag: result.data?.[0] || null, error: null }
   } catch (error) {
     console.error('Unexpected error:', error)
     return { tag: null, error: '获取标签时发生错误' }
@@ -69,18 +73,20 @@ export async function getTagById(id: number) {
 // Get tag by slug
 export async function getTagBySlug(slug: string) {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('tags')
-      .select('*')
-      .eq('slug', slug)
-      .single()
+    const result = await query<{
+      id: number
+      name: string
+      slug: string
+      color: string
+      created_at: string
+    }>('SELECT * FROM tags WHERE slug = $1', [slug])
 
-    if (error) {
-      console.error('Error fetching tag by slug:', error)
-      return { tag: null, error: error.message }
+    if (result.error) {
+      console.error('Error fetching tag by slug:', result.error)
+      return { tag: null, error: String(result.error) }
     }
 
-    return { tag: data, error: null }
+    return { tag: result.data?.[0] || null, error: null }
   } catch (error) {
     console.error('Unexpected error:', error)
     return { tag: null, error: '获取标签时发生错误' }
@@ -90,47 +96,34 @@ export async function getTagBySlug(slug: string) {
 // Create new tag
 export async function createTag(input: CreateTagInput) {
   try {
-    // Validate input
     const validatedData = createTagSchema.parse(input)
 
     // Check if slug already exists
-    const { data: existingTag } = await supabaseAdmin
-      .from('tags')
-      .select('id')
-      .eq('slug', validatedData.slug)
-      .single()
-
-    if (existingTag) {
+    const existingSlug = await query('SELECT id FROM tags WHERE slug = $1', [validatedData.slug])
+    if (existingSlug.data && existingSlug.data.length > 0) {
       return { success: false, error: 'URL别名已存在' }
     }
 
     // Check if name already exists
-    const { data: existingName } = await supabaseAdmin
-      .from('tags')
-      .select('id')
-      .eq('name', validatedData.name)
-      .single()
-
-    if (existingName) {
+    const existingName = await query('SELECT id FROM tags WHERE name = $1', [validatedData.name])
+    if (existingName.data && existingName.data.length > 0) {
       return { success: false, error: '标签名称已存在' }
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('tags')
-      .insert(validatedData)
-      .select()
-      .single()
+    const result = await query<{ id: number }>(
+      'INSERT INTO tags (name, slug, color) VALUES ($1, $2, $3) RETURNING *',
+      [validatedData.name, validatedData.slug, validatedData.color || 'blue']
+    )
 
-    if (error) {
-      console.error('Error creating tag:', error)
-      return { success: false, error: error.message }
+    if (result.error) {
+      console.error('Error creating tag:', result.error)
+      return { success: false, error: String(result.error) }
     }
 
-    // Revalidate cache
     revalidatePath('/admin/tags')
     revalidatePath('/')
 
-    return { success: true, data, error: null }
+    return { success: true, data: result.data?.[0], error: null }
   } catch (error) {
     if (error instanceof z.ZodError) {
       return { success: false, error: '输入验证失败: ' + error.errors[0].message }
@@ -143,55 +136,67 @@ export async function createTag(input: CreateTagInput) {
 // Update existing tag
 export async function updateTag(input: UpdateTagInput) {
   try {
-    // Validate input
     const validatedData = updateTagSchema.parse(input)
     const { id, ...updateFields } = validatedData
 
     // Check if slug already exists (and it's not the current tag)
     if (updateFields.slug) {
-      const { data: existingTag } = await supabaseAdmin
-        .from('tags')
-        .select('id')
-        .eq('slug', updateFields.slug)
-        .neq('id', id)
-        .single()
-
-      if (existingTag) {
+      const existingSlug = await query(
+        'SELECT id FROM tags WHERE slug = $1 AND id != $2',
+        [updateFields.slug, id]
+      )
+      if (existingSlug.data && existingSlug.data.length > 0) {
         return { success: false, error: 'URL别名已存在' }
       }
     }
 
     // Check if name already exists (and it's not the current tag)
     if (updateFields.name) {
-      const { data: existingName } = await supabaseAdmin
-        .from('tags')
-        .select('id')
-        .eq('name', updateFields.name)
-        .neq('id', id)
-        .single()
-
-      if (existingName) {
+      const existingName = await query(
+        'SELECT id FROM tags WHERE name = $1 AND id != $2',
+        [updateFields.name, id]
+      )
+      if (existingName.data && existingName.data.length > 0) {
         return { success: false, error: '标签名称已存在' }
       }
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('tags')
-      .update(updateFields)
-      .eq('id', id)
-      .select()
-      .single()
+    const updateParts: string[] = []
+    const values: any[] = []
+    let i = 1
 
-    if (error) {
-      console.error('Error updating tag:', error)
-      return { success: false, error: error.message }
+    if (updateFields.name) {
+      updateParts.push(`name = $${i++}`)
+      values.push(updateFields.name)
+    }
+    if (updateFields.slug) {
+      updateParts.push(`slug = $${i++}`)
+      values.push(updateFields.slug)
+    }
+    if (updateFields.color) {
+      updateParts.push(`color = $${i++}`)
+      values.push(updateFields.color)
     }
 
-    // Revalidate cache
+    if (updateParts.length === 0) {
+      return { success: true, data: null, error: null }
+    }
+
+    values.push(id)
+    const result = await query(
+      `UPDATE tags SET ${updateParts.join(', ')} WHERE id = $${i} RETURNING *`,
+      values
+    )
+
+    if (result.error) {
+      console.error('Error updating tag:', result.error)
+      return { success: false, error: String(result.error) }
+    }
+
     revalidatePath('/admin/tags')
     revalidatePath('/')
 
-    return { success: true, data, error: null }
+    return { success: true, data: result.data?.[0], error: null }
   } catch (error) {
     if (error instanceof z.ZodError) {
       return { success: false, error: '输入验证失败: ' + error.errors[0].message }
@@ -204,33 +209,19 @@ export async function updateTag(input: UpdateTagInput) {
 // Delete tag
 export async function deleteTag(id: number) {
   try {
-    // First check if tag is being used by any prompts
-    const { data: usage, error: usageError } = await supabaseAdmin
-      .from('prompt_tags')
-      .select('prompt_id')
-      .eq('tag_id', id)
-      .limit(1)
-
-    if (usageError) {
-      console.error('Error checking tag usage:', usageError)
-      return { success: false, error: '检查标签使用情况时发生错误' }
-    }
-
-    if (usage && usage.length > 0) {
+    // Check if tag is being used
+    const usage = await query('SELECT prompt_id FROM prompt_tags WHERE tag_id = $1 LIMIT 1', [id])
+    if (usage.data && usage.data.length > 0) {
       return { success: false, error: '无法删除正在被使用的标签' }
     }
 
-    const { error } = await supabaseAdmin
-      .from('tags')
-      .delete()
-      .eq('id', id)
+    const result = await query('DELETE FROM tags WHERE id = $1', [id])
 
-    if (error) {
-      console.error('Error deleting tag:', error)
-      return { success: false, error: error.message }
+    if (result.error) {
+      console.error('Error deleting tag:', result.error)
+      return { success: false, error: String(result.error) }
     }
 
-    // Revalidate cache
     revalidatePath('/admin/tags')
     revalidatePath('/')
 
@@ -244,28 +235,28 @@ export async function deleteTag(id: number) {
 // Get tags with prompt count
 export async function getTagsWithStats() {
   try {
-    // First get all tags
-    const { data: tags, error: tagsError } = await supabaseAdmin
-      .from('tags')
-      .select('*')
-      .order('name')
+    const tagsResult = await query<{
+      id: number
+      name: string
+      slug: string
+      color: string
+      created_at: string
+    }>('SELECT * FROM tags ORDER BY name')
 
-    if (tagsError) {
-      console.error('Error fetching tags:', tagsError)
-      return { tags: [], error: tagsError.message }
+    if (tagsResult.error) {
+      console.error('Error fetching tags:', tagsResult.error)
+      return { tags: [], error: String(tagsResult.error) }
     }
 
-    // Then get prompt count for each tag
     const tagsWithCounts = await Promise.all(
-      (tags || []).map(async (tag) => {
-        const { count, error: countError } = await supabaseAdmin
-          .from('prompt_tags')
-          .select('prompt_id', { count: 'exact', head: true })
-          .eq('tag_id', tag.id)
-
+      (tagsResult.data || []).map(async (tag) => {
+        const countResult = await query<{ count: string }>(
+          'SELECT COUNT(*) as count FROM prompt_tags WHERE tag_id = $1',
+          [tag.id]
+        )
         return {
           ...tag,
-          prompt_count: countError ? 0 : count || 0
+          prompt_count: parseInt(countResult.data?.[0]?.count || '0', 10)
         }
       })
     )
@@ -280,15 +271,12 @@ export async function getTagsWithStats() {
 // Popular tags (by usage)
 export async function getPopularTags(limit = 10) {
   try {
-    // Get tags with stats first
     const { tags, error } = await getTagsWithStats()
 
     if (error) {
-      console.error('Error fetching popular tags:', error)
-      return { tags: [], error: error.message }
+      return { tags: [], error }
     }
 
-    // Sort by prompt count and limit
     const sortedTags = tags
       .sort((a, b) => b.prompt_count - a.prompt_count)
       .slice(0, limit)

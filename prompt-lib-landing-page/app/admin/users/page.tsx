@@ -18,7 +18,9 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { getUsers, banUser, unbanUser, createUser, resetPassword } from "@/lib/supabase"
+import { getUsers } from "@/app/actions/users"
+import { banUser, unbanUser, resetUserPassword } from "@/app/actions/users"
+import { createUser, resetPassword } from "@/lib/server-actions"
 import type { Database } from "@/lib/database"
 
 type Profile = Database['public']['Tables']['profiles']['Row']
